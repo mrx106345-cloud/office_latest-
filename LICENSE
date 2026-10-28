@@ -1,0 +1,29 @@
+YourDoc - an offline PDF and Office toolkit
+Copyright (C) 2026 Pryonx. All rights reserved.
+
+YourDoc is proprietary commercial software. It is licensed, not sold, under the
+End User Licence Agreement whose full text is in the file EULA.txt shipped
+alongside this notice (and shown for acceptance during installation). In short:
+
+  * the licence is revocable, non-exclusive and non-transferable;
+  * it covers one (1) named computer, bound by a hardware fingerprint recorded
+    inside the licence key issued to you by Pryonx;
+  * the licence is for the term recorded in that key (five years from issuance
+    by default, unless your invoice or key states otherwise). When that term
+    ends, or when the machine fingerprint changes, the licence ends and a
+    renewed key is required;
+  * you may not redistribute, sublicense, sell or otherwise make the Software
+    available to any other person or computer;
+  * the source code is not disclosed and is not distributed with the Software.
+
+See EULA.txt for the complete, authoritative terms. This file exists only as a
+short pointer to it; where the two differ, EULA.txt governs.
+
+Third-party components bundled with YourDoc remain under their own permissive
+licences, which are unaffected by this proprietary licence - see NOTICE and
+THIRD_PARTY_NOTICES.md.
+
+Earlier releases of YourDoc were licensed under the MIT License (and, before
+that, the GNU Affero General Public License, because they linked against
+AGPL-licensed PyMuPDF). Those releases are historic; from this release onward
+YourDoc is a commercial, proprietary product under the EULA above.

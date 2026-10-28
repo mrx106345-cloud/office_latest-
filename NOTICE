@@ -1,0 +1,74 @@
+NOTICE for YourDoc
+==================
+
+YourDoc is proprietary commercial software. It is licensed, not sold, under the
+End User Licence Agreement in the file EULA.txt, in this folder. A short
+summary of that licence is in LICENSE, in this folder.
+
+The licence covers the *software*. It does not cover the brand, and it grants
+no right to redistribute the software.
+
+
+Trademarks
+----------
+
+The following are the property of Pryonx and are NOT licensed for reuse:
+
+  * the name "Pryonx"
+  * the YourDoc name
+  * the Pryonx logo and artwork (assets/pryonx-logo-source.jpg and everything
+    derived from it)
+
+The EULA grants permission to install and use the Software on the machine a
+licence key is bound to. It does not grant permission to use these marks to
+endorse a different product, to imply that Pryonx is behind something other
+than the genuine YourDoc application, or to redistribute the Software at all.
+
+
+Third-party components
+----------------------
+
+YourDoc bundles third-party libraries under their own licences. Those licences
+apply to those components and are unaffected by the proprietary EULA covering
+YourDoc. Every one of them is permissive; none is copyleft.
+
+  * pypdf - BSD-3-Clause (merge, page ranges, encrypted-PDF handling)
+  * pypdfium2 / PDFium - Apache-2.0 OR BSD-3-Clause (page rendering)
+  * reportlab - BSD-3-Clause (Word/Excel -> PDF writer)
+  * pdfplumber / pdfminer.six - MIT (PDF text and table extraction)
+  * python-docx - MIT (.docx reader/writer)
+  * openpyxl - MIT (.xlsx reader/writer)
+  * pandas / NumPy - BSD-3-Clause (tabular assembly)
+  * Pillow - MIT-CMU (image encode/decode)
+  * cryptography - Apache-2.0 OR BSD-3-Clause (AES for encrypted PDFs, and the
+    Ed25519 signature check behind commercial licensing)
+  * CustomTkinter - MIT
+  * tkinterdnd2 - MIT (optional drag and drop)
+  * DejaVu Sans - DejaVu Fonts Licence (bundled fallback font)
+  * Tcl/Tk - BSD-style
+  * PyInstaller - GPL-2.0 with a bundling exception (build-time only, not
+    shipped)
+
+Full details, including the authoritative licence text for each package, are
+in THIRD_PARTY_NOTICES.md. Where this summary and that file disagree, that file
+wins.
+
+
+Source code
+-----------
+
+The source code for YourDoc is not distributed with the application, and the
+EULA grants no source-disclosure right. Earlier releases (MIT, and AGPL-3.0
+before that, when the app linked against AGPL-licensed PyMuPDF) are not covered
+by this notice; that dependency was replaced long ago and the current release
+is closed-source commercial software.
+
+
+Licensing and activation
+-----------------------
+
+YourDoc is sold per machine. A licence key, issued by Pryonx and bound to the
+hardware fingerprint of one specific computer, is required to install and run
+the Software. Keys are verified locally on every launch - there is no
+activation server, no phone-home and no account. See the "Licence" section of
+README.md for the buyer-facing explanation, and EULA.txt for the legal terms.

@@ -1,0 +1,11 @@
+# YourDoc - test/development dependencies
+# Kept separate from requirements.txt so end users installing the app never
+# pull in the test toolkit. Install with:
+#     pip install -r requirements.txt -r requirements-dev.txt
+# Run the suite with:
+#     python tools/run_tests.py
+
+pytest==9.1.1                  # test runner and fixtures
+pytest-cov==7.1.0              # coverage reporting and the coverage gate
+pytest-timeout==2.4.0          # stops a hung engine call from stalling the suite
+hypothesis==6.168.3            # property-based / fuzz testing

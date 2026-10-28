@@ -1,0 +1,18 @@
+# Normalize line endings so builds are identical on every OS.
+* text=auto
+
+# Shell scripts and Linux packaging hooks must stay LF (a CRLF shebang breaks
+# them on the Linux runner); the Windows Inno script wants CRLF.
+*.sh   text eol=lf
+*.bash text eol=lf
+*.iss  text eol=crlf
+*.desktop text eol=lf
+
+# Never touch these.
+*.png  binary
+*.ico  binary
+*.ttf  binary
+*.jpg  binary
+*.pdf  binary
+*.docx binary
+*.xlsx binary

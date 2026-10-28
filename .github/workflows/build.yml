@@ -1,0 +1,85 @@
+name: Build distributable installers
+
+# Builds the license-gated YourDoc artifacts on real target hardware in GitHub's
+# cloud, so no Mac and no local WSL/Docker are required:
+#   * ubuntu-latest  -> dist/YourDoc-<ver>.deb and .rpm   (real Linux kernel)
+#   * macos-latest   -> dist/YourDoc-<ver>.dmg            (real Apple silicon/Intel)
+# Download the results from the "Artifacts" list of each run. The build scripts
+# are never shipped to customers -- they receive only the .deb/.rpm/.dmg.
+#
+# NOTE: macOS minutes are free only for PUBLIC repos; a private repo is billed at
+# 10x weight. An unsigned .dmg will still trip Gatekeeper -- provide the Apple
+# Developer secrets below (and an Apple Developer account, $99/yr) to sign/notarize.
+
+on:
+  workflow_dispatch: {}          # run it by hand from the Actions tab
+  push:
+    tags: ["v*"]                 # or automatically on each version tag
+
+jobs:
+  linux:
+    name: Linux (.deb + .rpm)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # System Python is used (not actions/setup-python) so tkinter is wired to
+      # the runner's Tcl/Tk -- PyInstaller bundles whatever Tk the interpreter
+      # links against.
+      - name: Install build + runtime dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3 python3-pip python3-tk \
+              ruby ruby-dev build-essential
+          sudo gem install fpm
+          python3 -m pip install --upgrade pip
+          python3 -m pip install -r requirements.txt pyinstaller
+
+      - name: Confirm the publisher key is embedded
+        run: |
+          python3 - <<'PY'
+          from src import license as l
+          assert not l.PUBLIC_KEY.startswith("PLACEHOLDER"), "no publisher key!"
+          print("embedded key:", l.PUBLIC_KEY[:8], "...")
+          PY
+
+      - name: Build .deb and .rpm into dist/
+        run: python3 build_linux_package.py
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: YourDoc-linux
+          path: |
+            dist/*.deb
+            dist/*.rpm
+
+  macos:
+    name: macOS (.dmg)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build + runtime dependencies
+        run: |
+          brew install python-tk@3.12 || true
+          python3 -m pip install --upgrade pip
+          python3 -m pip install -r requirements.txt pyinstaller
+
+      - name: Confirm the publisher key is embedded
+        run: python3 -c "from src import license as l; assert not l.PUBLIC_KEY.startswith('PLACEHOLDER')"
+
+      # Ad-hoc (unsigned) build by default; Gatekeeper will prompt strangers.
+      # Provide APPLE_SIGNING_IDENTITY (and the cert/profile in your keychain via
+      # a secrets-based restore step) to codesign + notarize a trusted .dmg.
+      - name: Build the .app and .dmg into dist/
+        run: |
+          if [ -n "${{ vars.APPLE_SIGNING_IDENTITY }}" ]; then
+            python3 build_macos_package.py --sign "${{ vars.APPLE_SIGNING_IDENTITY }}" --notarize
+          else
+            python3 build_macos_package.py
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: YourDoc-macos
+          path: dist/*.dmg

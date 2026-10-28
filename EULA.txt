@@ -1,0 +1,105 @@
+YourDoc - End User Licence Agreement
+Copyright (C) 2026 Pryonx. All rights reserved.
+
+IMPORTANT - READ BEFORE INSTALLING OR USING YOURDOC
+
+This End User Licence Agreement ("Agreement") is a legal agreement between you
+(either an individual or a single business entity) and Pryonx ("Pryonx", "we")
+for the proprietary software, including the YourDoc desktop application, its
+installer and any associated documentation (together, the "Software"). By
+installing, activating or using the Software you agree to be bound by this
+Agreement. If you do not agree to all of its terms, do not install or use the
+Software, and delete any copies you have obtained.
+
+
+1. Grant of licence
+
+Subject to your payment of the applicable licence fee and your continued
+compliance with this Agreement, Pryonx grants you a revocable, non-exclusive,
+non-transferable licence to install and use one (1) copy of the Software on a
+single computer, for the term recorded in the licence key issued to you by
+Pryonx (the "Term"). Unless your invoice or the licence key states a different
+Term, the Term is five (5) years from the date the licence key is issued.
+
+"Single computer" means the one machine whose hardware fingerprint is recorded
+inside your licence key at the time it is issued (see section 3).
+
+
+2. No redistribution
+
+The Software is proprietary and is not free or open-source software. You may
+not: (a) rent, lease, sublicense, sell, redistribute or otherwise make the
+Software available to any other person or computer, whether for payment or
+free; (b) remove, obscure or alter any licence notice, trademark notice or
+this Agreement; or (c) reverse engineer, decompile or disassemble the Software
+except, and only to the extent, that applicable law expressly permits this
+notwithstanding this restriction. The source code for the Software is not
+distributed with the application and no source-code escrow is offered.
+
+
+3. Machine binding and expiry
+
+The Software verifies your licence key locally on each launch. Verification
+checks the key's cryptographic signature, its expiry date, and a fingerprint
+derived from the network adapters installed in your computer (falling back to
+an operating-system identifier where no qualifying adapter is present). If the
+fingerprint changes, or if the Term ends, the licence granted under section 1
+automatically terminates and the Software will stop working on that computer
+until a new or renewed key is issued by Pryonx.
+
+Hardware upgrades, adapter replacement or an operating-system reinstall may
+change this fingerprint. This is treated as a support matter, not a breach of
+this Agreement: contact Pryonx and a renewed key bound to the current machine
+will be issued under the licence terms you purchased.
+
+A licence key is issued for one named computer and is not transferable to a
+different computer without Pryonx's written consent. Sharing your key with
+others is a breach of this Agreement.
+
+Pryonx may also, in its discretion, shorten or extend a Term for a particular
+customer, for example to issue a short evaluation licence or a multi-year
+contract. The Term in force for your copy is the one recorded inside your
+licence key, not the five-year default stated above.
+
+
+4. Third-party components
+
+The Software bundles open-source and third-party components, each under its own
+permissive licence. Those licences are listed in THIRD_PARTY_NOTICES.md, which
+is installed alongside the Software and is not changed or restricted by this
+Agreement. Nothing in this Agreement limits your rights under, or imposes
+conditions beyond, those third-party licences on the components they cover.
+
+
+5. Privacy
+
+The Software performs no background network communication: there is no
+telemetry, no update check and no account. Licence activation is verified
+locally against the key you enter, and no information about your computer or
+its use is sent to Pryonx unless you contact support yourself.
+
+
+6. Disclaimer of warranty
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL PRYONX
+BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF
+CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+
+7. Termination
+
+This Agreement, and the licence it grants, terminates automatically if you
+breach any of its terms, if the Term recorded in your licence key ends without
+renewal, or if your computer's hardware fingerprint changes such that the key
+no longer verifies. Upon termination you must delete all copies of the Software
+in your possession or control.
+
+
+8. Governing law and contact
+
+This Agreement is governed by the laws of the jurisdiction in which Pryonx is
+established. Questions about this Agreement, licence keys, renewals or
+reissues should be sent to info.pryonx@gmail.com.

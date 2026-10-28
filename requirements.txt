@@ -1,0 +1,34 @@
+# YourDoc - 100% offline document toolkit
+# All dependencies are local libraries. Nothing here phones home at runtime.
+# Install with:  pip install -r requirements.txt
+#
+# Pins mirror the exact versions the test suite, the coverage gates and the
+# frozen build are validated against (tools/run_tests.py). When a pin is
+# bumped, re-run the full suite and rebuild dist/ before shipping.
+
+# --- GUI -------------------------------------------------------------------
+customtkinter==6.0.0           # modern dark-themed Tkinter widgets
+tkinterdnd2==0.4.2             # optional native drag & drop (graceful fallback)
+
+# --- PDF core --------------------------------------------------------------
+pypdf==6.18.0                  # merge / page ranges / encrypted-PDF handling
+pypdfium2==5.13.0              # page rendering (PDF -> Images), off MuPDF's own engine
+reportlab==5.0.1               # Word/Excel -> PDF writer (canvas + Platypus)
+# pypdf only implements AES (used to open encrypted PDFs) via a crypto backend.
+# Without this, AES decryption raises DependencyError at runtime.
+cryptography==50.0.1
+
+# --- Conversions -----------------------------------------------------------
+pdfplumber==0.11.10            # table extraction for PDF -> .xlsx
+pandas==3.0.6                  # tabular assembly
+openpyxl==3.1.5                # .xlsx reader/writer engine
+python-docx==1.2.0             # .docx reader/writer engine
+Pillow==12.3.0                 # image encode/decode for Images -> PDF
+
+# Note: PyMuPDF, pdf2docx and OpenCV are deliberately NOT dependencies. They
+# carried an AGPL licence that would force the source to be published, so the
+# writer was rebuilt on reportlab and rendering on pypdfium2 instead. That is
+# why this project can be distributed closed-source under MIT.
+
+# --- Packaging -------------------------------------------------------------
+pyinstaller==6.22.3            # build.py -> standalone .exe / .app / ELF

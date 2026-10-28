@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "yourdoc"
+# Kept in step with app.py's __version__ by tests/regression, which reads
+# app.py rather than this file so app.py stays the single source of truth.
+version = "1.3.0"
+description = "A local, offline desktop PDF and Office toolkit."
+readme = "README.md"
+requires-python = ">=3.10"
+# Proprietary commercial software, not an open-source licence: the terms live
+# in EULA.txt (shown at install time); LICENSE is a short pointer to it. This
+# is not SPDX metadata and is not meant to be read as an open-source grant.
+license = { file = "LICENSE" }
+authors = [{ name = "Pryonx" }]
+keywords = ["pdf", "office", "offline", "converter", "desktop", "tkinter"]
+
+# The pinned versions YourDoc is built, frozen and tested against live in
+# requirements.txt. They are not repeated here on purpose: a second list would
+# drift, and requirements.txt is what the test suite and CI actually install.
+# This file exists so the supported Python range is declared and enforceable --
+# the code uses PEP 604 unions (`str | None`), which need 3.10 or newer.
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/pryonx/yourdoc"
+Issues = "https://github.com/pryonx/yourdoc/issues"
+
+[project.gui-scripts]
+yourdoc = "app:main"
+
+[tool.setuptools]
+# The application is a small tree, not an importable library: app.py at the
+# root, with the code under src/. Listed explicitly so a stray test file or
+# scratch script is not swept into a distribution.
+packages = ["src", "src.engine", "src.ui"]
+py-modules = ["app"]
+
+[tool.setuptools.package-data]
+"*" = ["../assets/*"]
