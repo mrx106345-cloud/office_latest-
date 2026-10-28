@@ -154,9 +154,12 @@ def fpm_package(root: Path, version: str, target: str) -> Path:
         # Ship the staging root contents at their absolute FHS paths.
         "--config-files", f"/usr/share/applications/{LAUNCHER}.desktop",
     ]
-    # fpm maps "./opt/..." -> "/opt/..." when the source is a directory prefix.
-    cmd += ["-C", str(root), "."]
+    # Ship the staging root contents at their absolute FHS paths. fpm's option
+    # parser (clamp) requires every option BEFORE positional inputs, so -C and
+    # the output (-p) go first and the "." input is the final argument.
+    cmd += ["-C", str(root)]
     cmd += ["-p", str(DIST_DIR / f"{APP_NAME}-{version}.{target}")]
+    cmd += ["."]
 
     run(cmd)
     out = DIST_DIR / f"{APP_NAME}-{version}.{target}"
