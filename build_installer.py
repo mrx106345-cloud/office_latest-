@@ -237,6 +237,70 @@ def find_signtool() -> Path | None:
     return candidates[0] if candidates else None
 
 
+def _sign_via_powershell(target: Path, *, pfx: str | None, thumbprint: str | None) -> bool:
+    """Authenticode-sign using PowerShell when ``signtool.exe`` is unavailable.
+
+    ``Set-AuthenticodeSignature`` is built into Windows and needs only a
+    certificate: a ``.pfx`` (imported transiently into the current user's store,
+    then removed) or a thumbprint already in that store. A timestamp is applied
+    so the signature stays valid after the certificate expires.
+    """
+
+    if not sys.platform.startswith("win"):
+        return False
+    if not (pfx or thumbprint):
+        return False
+
+    script = r"""
+$ErrorActionPreference = 'Stop'
+$target = $env:YOURDOC_SIGN_TARGET
+$cert = $null
+$imported = $null
+try {
+    if ($env:YOURDOC_SIGN_PFX) {
+        $sec = ConvertTo-SecureString -String $env:YOURDOC_SIGN_PFX_PASSWORD -AsPlainText -Force
+        $imported = Import-PfxCertificate -FilePath $env:YOURDOC_SIGN_PFX `
+            -CertStoreLocation Cert:\CurrentUser\My -Password $sec
+        $cert = $imported
+    } else {
+        $cert = Get-ChildItem -Path ("Cert:\CurrentUser\My\" + $env:YOURDOC_SIGN_CERT)
+    }
+    if (-not $cert) { throw 'no signing certificate resolved' }
+    $res = Set-AuthenticodeSignature -FilePath $target -Certificate $cert `
+        -TimestampServer 'http://timestamp.digicert.com'
+    Write-Output ("STATUS=" + $res.Status)
+    # A self-signed certificate always verifies as NotTrustedSigner/UnknownError
+    # because the chain terminates in an untrusted root -- that is expected and
+    # the trust guide tells the user to install the certificate once. The
+    # signature is still attached, which is what we are building here. Only treat
+    # it as a failure when nothing was actually signed.
+    if ((-not $res.SignerCertificate) -or ($res.Status -eq 'NotSigned')) { exit 1 }
+} finally {
+    if ($imported) { Remove-Item -Path $imported.PSPath -Force -ErrorAction SilentlyContinue }
+}
+"""
+    env = dict(os.environ)
+    env["YOURDOC_SIGN_TARGET"] = str(target)
+    try:
+        result = subprocess.run(
+            [
+                "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                "-Command", script,
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+    except OSError:
+        return False
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip().splitlines()
+        print(f"  PowerShell signing failed: {detail[-1] if detail else result.returncode}")
+        return False
+    return True
+
+
 def sign_setup(setup: Path, *, required: bool, quiet: bool = False) -> bool:
     """Authenticode-sign one file, if a certificate is configured.
 
@@ -270,11 +334,18 @@ def sign_setup(setup: Path, *, required: bool, quiet: bool = False) -> bool:
 
     tool = find_signtool()
     if tool is None:
+        # No Windows SDK on this machine: try PowerShell's native Authenticode
+        # signing, which needs only a certificate. This is what lets a plain
+        # build host produce a signed installer.
+        if _sign_via_powershell(setup, pfx=pfx, thumbprint=thumbprint):
+            if not quiet:
+                print("  signature added (PowerShell)")
+            return True
         if quiet:
             return False
         message = (
-            "signtool.exe was not found. Install the Windows SDK, or point "
-            "YOURDOC_SIGNTOOL at it."
+            "signtool.exe was not found and PowerShell signing did not succeed. "
+            "Install the Windows SDK, or point YOURDOC_SIGNTOOL at signtool."
         )
         if required:
             raise SystemExit(f"Code signing is required but {message}")

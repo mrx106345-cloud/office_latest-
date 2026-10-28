@@ -102,6 +102,80 @@ def freeze() -> Path:
     return target
 
 
+def bundle_icon(app: Path) -> bool:
+    """Give the .app a real icon by building an .icns and wiring Info.plist.
+
+    The brand pipeline produces a Windows ``.ico`` and a ``.png``, but a macOS
+    bundle needs a multi-resolution ``.icns`` -- without one Finder and the Dock
+    show the generic application icon. Render the monogram at 1024 px, lay it out
+    as an ``.iconset``, and let Apple's ``iconutil`` (built into macOS) compile
+    it, so nothing extra has to be installed on the CI runner.
+
+    Returns ``True`` when the icon was applied. Never fatal: a failure here only
+    means a missing icon, not a broken build.
+    """
+
+    import plistlib
+    import tempfile
+
+    try:
+        from PIL import Image
+
+        sys.path.insert(0, str(PROJECT_ROOT))
+        from src.ui import branding
+
+        mark = branding.load_image(branding.MARK_PNG)
+        if mark is None:
+            print("  icon: no brand mark available, skipping .icns")
+            return False
+        base = branding.build_icon(mark, 1024)
+    except Exception as exc:  # noqa: BLE001 - cosmetic
+        print(f"  icon: could not render brand mark ({exc}); skipping")
+        return False
+
+    sizes = {
+        "icon_16x16.png": 16,
+        "icon_16x16@2x.png": 32,
+        "icon_32x32.png": 32,
+        "icon_32x32@2x.png": 64,
+        "icon_128x128.png": 128,
+        "icon_128x128@2x.png": 256,
+        "icon_256x256.png": 256,
+        "icon_256x256@2x.png": 512,
+        "icon_512x512.png": 512,
+        "icon_512x512@2x.png": 1024,
+    }
+
+    resources = app / "Contents" / "Resources"
+    iconset = Path(tempfile.mkdtemp()) / "YourDoc.iconset"
+    iconset.mkdir()
+    try:
+        for name, px in sizes.items():
+            base.resize((px, px), Image.LANCZOS).save(iconset / name, format="PNG")
+        icns = resources / "YourDoc.icns"
+        run(["iconutil", "-c", "icns", str(iconset), "-o", str(icns)])
+    finally:
+        shutil.rmtree(iconset.parent, ignore_errors=True)
+
+    if not icns.is_file():
+        print("  icon: iconutil produced no .icns; skipping")
+        return False
+
+    # Point the bundle at the new icon so Finder and the Dock pick it up.
+    plist_path = app / "Contents" / "Info.plist"
+    try:
+        with plist_path.open("rb") as handle:
+            info = plistlib.load(handle)
+        info["CFBundleIconFile"] = "YourDoc.icns"
+        info["CFBundleIconName"] = "YourDoc"
+        with plist_path.open("wb") as handle:
+            plistlib.dump(info, handle)
+    except Exception as exc:  # noqa: BLE001
+        print(f"  icon: could not update Info.plist ({exc})")
+    print("  icon: embedded YourDoc.icns")
+    return True
+
+
 def ad_hoc_sign(app: Path) -> None:
     """Sign with the ad-hoc identity (``-``): free, no Apple account.
 
@@ -173,6 +247,7 @@ def main(argv: list[str] | None = None) -> int:
     DIST_DIR.mkdir(exist_ok=True)
 
     app = freeze()
+    bundle_icon(app)  # before signing, so the signature covers the icon
     signed = "none"
     if args.sign:
         sign(app, args.sign,

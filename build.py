@@ -161,6 +161,43 @@ def _brand_data() -> list[str]:
     return ["--add-data", f"{PROJECT_ROOT / ASSETS_FOLDER}{separator}{ASSETS_FOLDER}"]
 
 
+def _ensure_assets() -> None:
+    """Derive the brand artwork before anything reads it.
+
+    ``assets/*.png``/``*.ico`` are generated from the committed logo source, not
+    checked in. On a fresh CI checkout they do not exist yet, so this must run
+    *before* the icon is chosen -- otherwise the frozen binary is built with no
+    OS icon on a clean tree even though the same build has one locally.
+    """
+
+    from src.ui import branding  # noqa: PLC0415 - keeps build.py importable standalone
+
+    try:
+        branding.ensure_brand_assets()
+    except Exception as exc:  # noqa: BLE001 - cosmetic, never fail the build
+        print(f"  warning: could not generate brand assets: {exc}")
+
+
+def _select_icon(args: argparse.Namespace) -> "Path | None":
+    """Pick the per-platform icon to bake into the binary, or ``None``.
+
+    Windows embeds the ``.ico``; PyInstaller simply ignores an icon on Linux (the
+    desktop launcher supplies it there). macOS wants a ``.icns``, which branding
+    does not generate -- ``build_macos_package.py`` injects one into the finished
+    bundle instead, so nothing is passed at freeze time.
+    """
+
+    if args.icon:
+        return Path(args.icon)
+    if sys.platform.startswith("win"):
+        candidate = PROJECT_ROOT / "assets" / "yourdoc.ico"
+        return candidate if candidate.exists() else None
+    if sys.platform == "darwin":
+        candidate = PROJECT_ROOT / "assets" / "YourDoc.icns"
+        return candidate if candidate.exists() else None
+    return None
+
+
 def _write_version_info(path: Path) -> Path:
     """Write the Windows VERSIONINFO resource, read fresh from ``app.py``.
 
@@ -221,9 +258,8 @@ def build(args: argparse.Namespace) -> int:
         print("Cleaning previous artifacts...")
         _clean()
 
-    icon = PROJECT_ROOT / "assets" / "yourdoc.ico"
-    if args.icon:
-        icon = Path(args.icon)
+    _ensure_assets()
+    icon = _select_icon(args)
 
     command: list[str] = [
         str(PROJECT_ROOT / ENTRY_POINT),
@@ -241,10 +277,13 @@ def build(args: argparse.Namespace) -> int:
         str(PROJECT_ROOT),
     ]
 
-    if icon.exists():
+    if icon:
         command += ["--icon", str(icon)]
     else:
-        print(f"  note: icon not found at {icon}, building without one")
+        print(
+            "  note: no icon baked into the binary for this platform"
+            " (macOS injects a .icns into the bundle afterwards)"
+        )
 
     version_file = _write_version_info(PROJECT_ROOT / "assets" / "version_info.txt")
     if version_file.exists():

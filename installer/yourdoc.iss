@@ -177,7 +177,7 @@ var
   Key: String;
 begin
   Result := True;
-  if CurPageID <> LicenseKeyPage.PageID then
+  if CurPageID <> LicenseKeyPage.ID then
     Exit;
   Key := Trim(LicenseKeyPage.Values[0]);
   if Key = '' then
