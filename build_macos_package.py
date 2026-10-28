@@ -80,14 +80,25 @@ def freeze() -> Path:
     """PyInstaller one-dir windowed build yields dist/YourDoc/YourDoc.app."""
 
     run([sys.executable, str(PROJECT_ROOT / "build.py")])
-    app_bundle = DIST_DIR / APP_NAME / f"{APP_NAME}.app"
-    if not app_bundle.is_dir():
-        raise SystemExit(f"PyInstaller did not produce {app_bundle}")
-    # Lift the .app to dist/YourDoc.app for a tidy top-level artifact.
+    # PyInstaller's macOS onedir+windowed bundle can land at either
+    # dist/YourDoc.app (top-level, the usual case) or dist/YourDoc/YourDoc.app
+    # depending on the version -- find whichever was actually produced.
+    candidates = [
+        DIST_DIR / f"{APP_NAME}.app",
+        DIST_DIR / APP_NAME / f"{APP_NAME}.app",
+    ]
+    app_bundle = next((c for c in candidates if c.is_dir()), None)
+    if app_bundle is None:
+        raise SystemExit(
+            "PyInstaller did not produce a .app bundle in dist/ "
+            f"(looked for: {[str(c) for c in candidates]})"
+        )
+    # Ensure the artifact sits at dist/YourDoc.app for a tidy top-level name.
     target = DIST_DIR / f"{APP_NAME}.app"
-    if target.exists():
-        shutil.rmtree(target)
-    shutil.copytree(app_bundle, target, symlinks=True)
+    if app_bundle.resolve() != target.resolve():
+        if target.exists():
+            shutil.rmtree(target)
+        shutil.copytree(app_bundle, target, symlinks=True)
     return target
 
 
