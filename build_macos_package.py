@@ -53,6 +53,47 @@ DIST_DIR = PROJECT_ROOT / "dist"
 APP_NAME = "YourDoc"
 IDENTIFIER = "com.pryonx.yourdoc"
 
+#: Plain-text Gatekeeper unlock guide dropped into the .dmg next to the app.
+#: This build is ad-hoc signed and NOT notarized (no paid Apple Developer
+#: account), so macOS blocks the first open; the buyer needs these steps once.
+FIRST_RUN_GUIDE = f"""{APP_NAME} - opening it for the first time
+
+{APP_NAME} is signed with a free "ad-hoc" signature rather than an Apple
+Developer ID, so Apple has not notarized it. macOS therefore warns on the very
+first launch that it "cannot be opened because the developer cannot be
+verified." This is expected and is not a defect. Approve it ONCE and it opens
+normally forever after.
+
+What you should have
+  - {APP_NAME}.app
+  (drag {APP_NAME}.app to the Applications shortcut next to it, or to your
+   /Applications folder, before the first launch.)
+
+Method 1 - right-click Open (works on most macOS versions)
+  1. In Finder, right-click (or Control-click) {APP_NAME}.app.
+  2. Choose Open, then click Open again in the warning box.
+
+Method 2 - System Settings (if the right-click option is missing, e.g. macOS 15 Sequoia)
+  1. Try to open {APP_NAME} once, so the block is recorded.
+  2. Open System Settings > Privacy & Security.
+  3. Under "Security", click Open Anyway next to the {APP_NAME} message.
+  4. Enter your password if asked, then confirm.
+
+Method 3 - Terminal (removes the download quarantine flag directly)
+  Run this, then open {APP_NAME} as usual:
+
+      xattr -dr com.apple.quarantine "/Applications/{APP_NAME}.app"
+
+Why this is needed at all
+  Apple only lets a Mac run software that is either notarized by a paid
+  Developer ID or explicitly approved by you. Buying the $99/yr account and
+  notarizing would remove this one-time step; it was not done here, so this
+  guide stands in its place. Nothing about {APP_NAME} changes after you approve
+  it - the warning never reappears for this app.
+
+Support: https://pryonx.vercel.app
+"""
+
 
 def app_version() -> str:
     source = (PROJECT_ROOT / "app.py").read_text(encoding="utf-8")
@@ -218,6 +259,11 @@ def make_dmg(app: Path, version: str) -> Path:
     shutil.copytree(app, staging / app.name, symlinks=True)
     # A /Applications symlink makes the familiar drag-to-install layout.
     (staging / "Applications").symlink_to(Path("/Applications"))
+    # Ship the Gatekeeper unlock steps *inside* the volume: this build is ad-hoc
+    # signed and not notarized (no Apple Developer account), so the very first
+    # open is blocked by "cannot be verified". The buyer sees the fix before
+    # they have to go looking for it.
+    (staging / "OPEN ME FIRST - reading.txt").write_text(FIRST_RUN_GUIDE, encoding="utf-8")
 
     dmg = DIST_DIR / f"{APP_NAME}-{version}.dmg"
     if dmg.exists():

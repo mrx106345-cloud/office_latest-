@@ -2,10 +2,11 @@ name: Build distributable installers
 
 # Builds the license-gated YourDoc artifacts on real target hardware in GitHub's
 # cloud, so no Mac and no local WSL/Docker are required:
+#   * windows-latest -> dist/YourDoc-<ver>-Setup.exe      (Inno Setup, self-signed)
 #   * ubuntu-latest  -> dist/YourDoc-<ver>.deb and .rpm   (real Linux kernel)
 #   * macos-latest   -> dist/YourDoc-<ver>.dmg            (real Apple hardware)
 # Download the results from the "Artifacts" list of each run. The build scripts
-# are never shipped to customers -- they receive only the .deb/.rpm/.dmg.
+# are never shipped to customers -- they receive only the .exe/.deb/.rpm/.dmg.
 #
 # Each job installs the project into an isolated venv: the runner's system Python
 # is "externally managed" (PEP 668) and refuses `pip install`, so a venv is the
@@ -20,6 +21,58 @@ on:
     tags: ["v*"]                 # or automatically on each version tag
 
 jobs:
+  windows:
+    name: Windows (.exe Setup)
+    runs-on: windows-latest
+    # The signing material is a repository SECRET, never a committed file. When
+    # they are absent the job still builds -- just unsigned, with a loud warning
+    # from build_installer.py -- so an unsigned artifact can never pass for a
+    # signed release unnoticed.
+    env:
+      SIGN_PFX_B64: ${{ secrets.YOURDOC_SIGN_PFX_B64 }}
+      SIGN_PFX_PASSWORD: ${{ secrets.YOURDOC_SIGN_PFX_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Inno Setup
+        run: choco install innosetup -y --no-progress
+
+      - name: Install project + PyInstaller
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pyinstaller
+
+      - name: Confirm the publisher key is embedded
+        run: python -c "from src import license as l; assert not l.PUBLIC_KEY.startswith('PLACEHOLDER')"
+
+      - name: Materialize the signing certificate (optional)
+        if: env.SIGN_PFX_B64 != ''
+        shell: pwsh
+        run: |
+          $pfx = Join-Path $env:RUNNER_TEMP 'yourdoc-signing.pfx'
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:SIGN_PFX_B64))
+          # Export just the PUBLIC certificate to ship beside the installer, so a
+          # buyer can trust it once via trust-cert.ps1. The private key stays in
+          # the .pfx on the ephemeral runner and is gone when the job ends.
+          $sec = ConvertTo-SecureString $env:SIGN_PFX_PASSWORD -AsPlainText -Force
+          $cert = New-Object Security.Cryptography.X509Certificates.X509Certificate2($pfx, $sec)
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          [IO.File]::WriteAllBytes("dist\Pryonx.cer", $cert.Export('Cert'))
+          "YOURDOC_SIGN_PFX=$pfx" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding ascii
+          "YOURDOC_SIGN_PFX_PASSWORD=$env:SIGN_PFX_PASSWORD" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding ascii
+
+      - name: Freeze + build the installer (signed when a cert is configured)
+        run: python build_installer.py --clean
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: YourDoc-windows
+          path: |
+            dist/*-Setup.exe
+            dist/Pryonx.cer
+            installer/trust-cert.ps1
+            installer/TRUSTING.md
+
   linux:
     name: Linux (.deb + .rpm)
     runs-on: ubuntu-latest

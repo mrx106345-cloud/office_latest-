@@ -2,7 +2,8 @@
 
 Goal: ship license-gated YourDoc as **real installer files** for macOS and Linux
 without owning a Mac and without paying Apple. The Windows build is already done
-(`dist/YourDoc.exe`, gate verified).
+(`dist/YourDoc-1.3.0-Setup.exe`, license-gated and signed with the self-signed
+Pryonx certificate).
 
 ---
 
@@ -70,6 +71,11 @@ Gatekeeper blocks it. This is expected, not a bug.
   xattr -dr com.apple.quarantine "/Applications/YourDoc.app"
   ```
 After that single approval the app opens normally forever.
+
+These exact steps now **ship inside the `.dmg`** as
+`OPEN ME FIRST - reading.txt`, dropped next to the app by
+`build_macos_package.py::make_dmg()`, so the buyer sees the unlock while the
+warning is on screen instead of having to search for it.
 
 **To make first launch silent** you must notarize — that is the only thing that
 requires the $99/yr Apple Developer ID. Nothing else about YourDoc needs it;

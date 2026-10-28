@@ -76,7 +76,18 @@ There is a second, smaller display: the yellow bar that says **Unknown
 publisher**. Installing the certificate once changes that to **Pryonx**, which
 is genuinely informative — it proves the file is Pryonx's and not someone else's.
 
-Do this once per computer, not once per install:
+Do this once per computer, not once per install.
+
+**Fastest: run the shipped script.** Right-click `trust-cert.ps1` -> **Run with
+PowerShell** and accept the elevation prompt. It installs the certificate into
+the two stores Authenticode consults and prints the result. To check it against
+the installer itself:
+
+```powershell
+.\trust-cert.ps1 -VerifyFile .\YourDoc-1.3.0-Setup.exe
+```
+
+**Or do it by hand:**
 
 1. Double-click `Pryonx.cer`.
 2. Click **Install Certificate…**

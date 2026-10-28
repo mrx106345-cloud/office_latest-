@@ -234,7 +234,7 @@ VSVersionInfo(
          StringStruct('FileDescription', 'YourDoc - offline PDF and Office toolkit'),
          StringStruct('FileVersion', '{version}'),
          StringStruct('InternalName', 'YourDoc'),
-         StringStruct('LegalCopyright', 'Copyright (C) 2026 Pryonx. MIT License.'),
+         StringStruct('LegalCopyright', 'Copyright (C) 2026 Pryonx. All rights reserved.'),
          StringStruct('OriginalFilename', 'YourDoc.exe'),
          StringStruct('ProductName', 'YourDoc'),
          StringStruct('ProductVersion', '{version}')])

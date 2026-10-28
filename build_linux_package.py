@@ -48,7 +48,7 @@ DESCRIPTION = "YourDoc - offline PDF and Office toolkit"
 VENDOR = "Pryonx"
 MAINTAINER = "Pryonx <info.pryonx@gmail.com>"
 LICENSE = "Proprietary (see EULA.txt)"
-SUPPORT_URL = "https://pryonx.example"  # replace with the real website, if any
+SUPPORT_URL = "https://pryonx.vercel.app"  # matches branding.WEBSITE_HOST
 
 
 def app_version() -> str:
