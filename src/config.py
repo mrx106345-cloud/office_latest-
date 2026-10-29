@@ -39,6 +39,21 @@ APP_DIR_NAME = "YourDoc"
 CONFIG_FILENAME = "config.json"
 HISTORY_FILENAME = "history.jsonl"
 
+#: The program version, used to give each release its *own* data folder so two
+#: installed versions never share an activation or a setting. ``app.py``
+#: ``__version__`` is the human-facing single source of truth (build and
+#: staging tools AST-read it); this mirrors it for the runtime storage layer,
+#: which cannot import ``app`` (import cycle) and must resolve a path even in a
+#: frozen build where the ``app.py`` source file is not on disk. A regression
+#: test asserts the two strings never drift.
+PROGRAM_VERSION = "1.4.0"
+
+#: When true, :func:`default_data_dir` nests the data folder under
+#: ``YourDoc/<version>`` so versions are isolated; when false the folder is the
+#: shared ``YourDoc`` root. Kept as a flag so the behaviour is explicit and
+#: testable rather than a hard-coded path.
+VERSION_ISOLATION = True
+
 #: Plain-text, timestamped log written by batch / watch / the CLI. Unlike the
 #: history file it is always on: automation needs a durable record a scheduled
 #: job can be diagnosed from, and it is local text the user may read or delete.
@@ -67,12 +82,12 @@ def _as_bool(value: object) -> bool:
     return bool(value)
 
 
-def default_data_dir() -> Path:
-    """Return the platform-appropriate per-user data directory.
+def _product_root() -> Path:
+    """The per-user ``YourDoc`` folder shared by every version.
 
-    * Windows  -> ``%APPDATA%\\YourDoc``
-    * macOS    -> ``~/Library/Application Support/YourDoc``
-    * Linux    -> ``$XDG_CONFIG_HOME/YourDoc`` or ``~/.config/YourDoc``
+    This is the pre-isolation location and the anchor a versioned folder is
+    nested under; the shipped app no longer stores live state here directly,
+    only the version subdirectories (and, for old installs, the shared config).
     """
 
     if sys.platform.startswith("win"):
@@ -82,6 +97,36 @@ def default_data_dir() -> Path:
         return Path.home() / "Library" / "Application Support" / APP_DIR_NAME
     base = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
     return Path(base) / APP_DIR_NAME
+
+
+def _data_dir_for(root: Path) -> Path:
+    """Compose a version folder under the product ``root``.
+
+    Split out from :func:`default_data_dir` so the nesting rule is testable even
+    when the autouse fixture redirects ``default_data_dir`` itself.
+    """
+
+    if VERSION_ISOLATION and PROGRAM_VERSION:
+        return root / PROGRAM_VERSION
+    return root
+
+
+def default_data_dir() -> Path:
+    """Return the platform-appropriate per-user data directory.
+
+    With :data:`VERSION_ISOLATION` the folder is nested under the program
+    version so each release keeps its own settings, activation, history and
+    automation log, and two installed versions never interfere:
+
+    * Windows  -> ``%APPDATA%\\YourDoc\\<version>``
+    * macOS    -> ``~/Library/Application Support/YourDoc/<version>``
+    * Linux    -> ``$XDG_CONFIG_HOME/YourDoc/<version>`` (or ``~/.config``)
+
+    When the flag is off - or in the tests that set ``VERSION_ISOLATION`` false
+    - it is the shared ``.../YourDoc`` root instead.
+    """
+
+    return _data_dir_for(_product_root())
 
 
 def _write_json(path: Path, payload: str) -> None:
@@ -121,6 +166,44 @@ def _read_config_file(path: Path) -> dict | None:
     except (OSError, ValueError):
         return None
     return raw if isinstance(raw, dict) else None
+
+
+def _migrate_legacy_root(base: Path) -> None:
+    """Copy pre-isolation state from the shared ``YourDoc`` root into ``base``.
+
+    Runs once per version folder, on the first launch after an upgrade, so an
+    existing activation, settings, history and automation log carry forward and
+    the older install keeps working untouched. Best-effort: on any problem the
+    fresh version folder is simply left as-is and the user activates normally.
+
+    Never overwrites anything already in ``base`` -- an initialised version
+    folder wins over the legacy root.
+    """
+
+    if (base / CONFIG_FILENAME).exists() or (base / POINTER_FILENAME).exists():
+        return
+    root = _product_root()
+    # Only migrate into a real ``<root>/<version>`` folder. A redirected
+    # ``default_data_dir`` (tests, portable installs) points elsewhere, so bail
+    # rather than read some unrelated shared folder.
+    if base.parent != root:
+        return
+    created = False
+    try:
+        copied = 0
+        for name in (CONFIG_FILENAME, HISTORY_FILENAME, BATCH_LOG_FILENAME, POINTER_FILENAME):
+            source = root / name
+            if source.is_file() and not (base / name).exists():
+                if not created:
+                    base.mkdir(parents=True, exist_ok=True)
+                    created = True
+                (base / name).write_bytes(source.read_bytes())
+                copied += 1
+        if created and copied == 0:
+            base.rmdir()
+    except OSError:
+        # A half-copied folder is still usable: it falls back to defaults.
+        pass
 
 
 @dataclass
@@ -291,6 +374,10 @@ class AppConfig:
         """
 
         base = default_dir or default_data_dir()
+        if default_dir is None and VERSION_ISOLATION:
+            # First launch after an upgrade: carry any shared-root state into
+            # this version's folder so an existing activation is not lost.
+            _migrate_legacy_root(base)
         config = cls()
         pointer = _read_pointer(base)
         primary = pointer or base
