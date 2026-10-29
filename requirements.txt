@@ -24,6 +24,13 @@ pandas==3.0.6                  # tabular assembly
 openpyxl==3.1.5                # .xlsx reader/writer engine
 python-docx==1.2.0             # .docx reader/writer engine
 Pillow==12.3.0                 # image encode/decode for Images -> PDF
+pytesseract==0.3.13            # thin wrapper for the Tesseract OCR engine (PDF -> Word OCR)
+
+# Note: pytesseract is only a Python wrapper. The heavy part is the native
+# `tesseract` binary, which is NOT bundled and must be installed by the buyer
+# (Windows: UB-Mannheim installer; macOS: brew install tesseract; Linux: apt
+# install tesseract-ocr). When it is absent, OCR surfaces per-OS install
+# guidance via DependencyMissingError instead of failing the rest of the app.
 
 # Note: PyMuPDF, pdf2docx and OpenCV are deliberately NOT dependencies. They
 # carried an AGPL licence that would force the source to be published, so the

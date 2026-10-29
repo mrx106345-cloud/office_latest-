@@ -28,6 +28,7 @@ import threading
 import time
 import uuid
 from collections.abc import Iterator, Sequence
+from io import BytesIO
 from pathlib import Path
 
 from pypdf import PdfReader, PdfWriter
@@ -48,6 +49,7 @@ from .errors import (
     OperationFailedError,
     UnsupportedFormatError,
 )
+from .deps import require
 from .task_runner import ProgressFn, make_progress
 
 __all__ = [
@@ -57,6 +59,13 @@ __all__ = [
     "merge_pdfs",
     "last_merge_pages",
     "writable",
+    "split_pdf",
+    "rotate_pdf",
+    "extract_pages_pdf",
+    "watermark_pdf",
+    "compress_pdf",
+    "strip_metadata",
+    "detect_metadata",
 ]
 
 PDF_SUFFIXES = {".pdf"}
@@ -625,3 +634,553 @@ def last_merge_pages(path: str | os.PathLike[str]) -> int | None:
         return _LAST_MERGE_PAGES.get(Path(path).resolve())
     except (OSError, ValueError):  # pragma: no cover - unresolvable path
         return None
+
+
+# --------------------------------------------------------------------------- #
+# Core page operations: split / rotate / extract / watermark / compress
+# --------------------------------------------------------------------------- #
+#: Valid per-page rotation angles for :func:`rotate_pdf`.
+_ROTATE_ANGLES = frozenset({0, 90, 180, 270})
+
+#: Text positions supported by :func:`watermark_pdf`.
+_WATERMARK_POSITIONS = (
+    "center",
+    "top-left",
+    "top-right",
+    "bottom-left",
+    "bottom-right",
+)
+
+_WATERMARK_MARGIN = 24.0
+
+
+def split_pdf(
+    source: str | os.PathLike[str],
+    output_dir: str | os.PathLike[str],
+    *,
+    mode: str = "each",
+    spec: str | None = None,
+    password: str | None = None,
+    progress: ProgressFn | None = None,
+    cancel_event: threading.Event | None = None,
+) -> list[Path]:
+    """Break one PDF into several files written into ``output_dir``.
+
+    ``mode="each"`` emits one file per page; ``mode="ranges"`` emits one file
+    per comma-separated group in ``spec`` (grammar of :func:`parse_range_groups`).
+    Original page order is preserved. Nothing is written back to ``source``.
+
+    Returns the list of files written. On cancellation or failure any files
+    already produced are removed, so a partial split never litters the folder.
+    """
+
+    if mode not in {"each", "ranges"}:
+        raise InvalidInputError(
+            f"Unknown split mode: {mode}",
+            user_message="Choose to split every page or by a page-range list.",
+        )
+    resolved = _validate_pdf(source)
+    reader = _open_reader(resolved, password)
+    page_count = len(reader.pages)
+    if page_count < 1:
+        raise InvalidInputError(
+            "The document has no pages.",
+            user_message="This PDF has no pages to split.",
+        )
+
+    if mode == "each":
+        groups: list[list[int]] = [[i] for i in range(page_count)]
+    else:
+        if not spec:
+            raise InvalidInputError(
+                "Range split needs a page selection.",
+                user_message="Enter the page groups to split on, e.g. 1-3, 4-6.",
+            )
+        groups = parse_range_groups(spec, page_count)
+
+    dest_dir = Path(output_dir).expanduser()
+    with writable(dest_dir):
+        dest_dir.mkdir(parents=True, exist_ok=True)
+
+    report = make_progress(progress, cancel_event)
+    results: list[Path] = []
+    total = len(groups)
+    try:
+        for position, group in enumerate(groups, start=1):
+            report(
+                (position - 1) / total,
+                f"Writing part {position} of {total}...",
+            )
+            writer = PdfWriter()
+            for index in group:
+                writer.add_page(reader.pages[index])
+            low, high = min(group) + 1, max(group) + 1
+            if len(group) == 1:
+                name = f"{resolved.stem}_page_{low:03d}"
+            else:
+                name = f"{resolved.stem}_pages_{low:03d}-{high:03d}"
+            target = _unique_path(dest_dir, name, ".pdf")
+            with _atomic_target(target) as tmp:
+                _write(writer, tmp)
+            results.append(target)
+    except BaseException:
+        # Roll back a half-finished split so a cancel is not mistaken for a
+        # smaller, successful export.
+        for written in results:
+            with contextlib.suppress(OSError):
+                written.unlink()
+        raise
+
+    report(1.0, f"Split into {len(results)} file(s)")
+    return results
+
+
+def rotate_pdf(
+    source: str | os.PathLike[str],
+    output: str | os.PathLike[str],
+    *,
+    angle: int = 90,
+    pages: str | None = None,
+    password: str | None = None,
+    progress: ProgressFn | None = None,
+    cancel_event: threading.Event | None = None,
+) -> Path:
+    """Rotate selected ``pages`` by ``angle`` (90/180/270), writing ``output``.
+
+    ``pages`` is an optional page spec (blank rotates the whole document). The
+    rotation is applied relative to each page's existing /Rotate, matching how
+    a viewer would stack a second rotation on top of the first.
+    """
+
+    try:
+        angle = int(angle)
+    except (TypeError, ValueError) as exc:
+        raise InvalidInputError(
+            f"Rotation angle is not a number: {angle}",
+            user_message="Choose 90, 180 or 270 degrees.",
+        ) from exc
+    if angle not in _ROTATE_ANGLES:
+        raise InvalidInputError(
+            f"Unsupported rotation angle: {angle}",
+            user_message="Rotate by 90, 180 or 270 degrees.",
+        )
+
+    resolved = _validate_pdf(source)
+    reader = _open_reader(resolved, password)
+    page_count = len(reader.pages)
+    report = make_progress(progress, cancel_event)
+
+    selected = (
+        set(range(page_count))
+        if not pages
+        else set(parse_page_ranges(pages, page_count))
+    )
+
+    writer = PdfWriter()
+    for index, page in enumerate(reader.pages):
+        report(index / max(page_count, 1), f"Reading page {index + 1} of {page_count}...")
+        writer.add_page(page)
+
+    dest = Path(output)
+    with _atomic_target(dest) as tmp:
+        for index in sorted(selected):
+            writer.pages[index].rotate(angle)
+        report(1.0, "Writing document...")
+        _write(writer, tmp)
+    return dest
+
+
+def extract_pages_pdf(
+    source: str | os.PathLike[str],
+    output: str | os.PathLike[str],
+    *,
+    spec: str,
+    password: str | None = None,
+    progress: ProgressFn | None = None,
+    cancel_event: threading.Event | None = None,
+) -> Path:
+    """Select and reorder pages by ``spec`` into a new ``output`` PDF.
+
+    A lightweight "organize" with no drag-and-drop UI: ``spec`` accepts the
+    shared page grammar, and pages appear in exactly the order written, so
+    ``"3,1-2"`` yields page 3 then pages 1 and 2.
+    """
+
+    resolved = _validate_pdf(source)
+    reader = _open_reader(resolved, password)
+    indices = parse_page_ranges(spec, len(reader.pages))
+    report = make_progress(progress, cancel_event)
+
+    writer = PdfWriter()
+    total = len(indices)
+    for position, index in enumerate(indices):
+        report(
+            position / total,
+            f"Adding page {index + 1} ({position + 1} of {total})...",
+        )
+        writer.add_page(reader.pages[index])
+
+    dest = Path(output)
+    with _atomic_target(dest) as tmp:
+        report(1.0, "Writing document...")
+        _write(writer, tmp)
+    return dest
+
+
+def _watermark_overlay(
+    width: float,
+    height: float,
+    *,
+    text: str,
+    position: str,
+    opacity: float,
+    size: float,
+    color: Sequence[float],
+) -> PdfReader:
+    """Render a single-page transparent watermark for a page of ``width`` x ``height``.
+
+    ReportLab draws the text into an in-memory PDF, which the caller merges over
+    a real page. Text is drawn horizontally so it stays extractable downstream
+    (a rotated glyph run is far harder to recover from the content stream).
+    """
+
+    canvas = require(
+        "reportlab.pdfgen.canvas", pip_name="reportlab", feature="Watermarks"
+    )
+    colors = require("reportlab.lib.colors", pip_name="reportlab", feature="Watermarks")
+
+    red, green, blue = (float(component) for component in color[:3])
+    buffer = BytesIO()
+    pdf = canvas.Canvas(buffer, pagesize=(width, height))
+    fill = colors.Color(red, green, blue)
+    try:
+        pdf.setFillAlpha(max(0.0, min(1.0, float(opacity))))
+    except Exception:  # noqa: BLE001 - older ReportLab without ExtGState alpha
+        fill = colors.Color(red, green, blue, alpha=float(opacity))
+    pdf.setFillColor(fill)
+    pdf.setFont("Helvetica", size)
+
+    text_width = pdf.stringWidth(text, "Helvetica", size)
+    if position == "center":
+        x = (width - text_width) / 2
+        y = height / 2
+    elif position == "top-left":
+        x, y = _WATERMARK_MARGIN, height - _WATERMARK_MARGIN
+    elif position == "top-right":
+        x, y = width - text_width - _WATERMARK_MARGIN, height - _WATERMARK_MARGIN
+    elif position == "bottom-left":
+        x, y = _WATERMARK_MARGIN, _WATERMARK_MARGIN
+    else:  # bottom-right
+        x, y = width - text_width - _WATERMARK_MARGIN, _WATERMARK_MARGIN
+    pdf.drawString(x, y, text)
+    pdf.save()
+
+    buffer.seek(0)
+    return PdfReader(buffer)
+
+
+def watermark_pdf(
+    source: str | os.PathLike[str],
+    output: str | os.PathLike[str],
+    *,
+    text: str,
+    position: str = "center",
+    opacity: float = 0.15,
+    size: float = 48,
+    color: Sequence[float] = (0.6, 0.6, 0.6),
+    password: str | None = None,
+    progress: ProgressFn | None = None,
+    cancel_event: threading.Event | None = None,
+) -> Path:
+    """Stamp ``text`` over every page of ``source`` and write ``output``.
+
+    The mark is a real text overlay (not flattened into pixels), so the water-
+    marked document keeps its searchable text layer. ``position`` is one of
+    :data:`_WATERMARK_POSITIONS`; ``color`` is 0-1 RGB floats.
+    """
+
+    if not text or not text.strip():
+        raise InvalidInputError(
+            "No watermark text given.",
+            user_message="Type the text to stamp on the pages.",
+        )
+    if position not in _WATERMARK_POSITIONS:
+        raise InvalidInputError(
+            f"Unknown watermark position: {position}",
+            user_message="Choose a corner or the centre of the page.",
+        )
+
+    resolved = _validate_pdf(source)
+    reader = _open_reader(resolved, password)
+    page_count = len(reader.pages)
+    report = make_progress(progress, cancel_event)
+
+    writer = PdfWriter()
+    for index, page in enumerate(reader.pages):
+        report(
+            index / max(page_count, 1),
+            f"Watermarking page {index + 1} of {page_count}...",
+        )
+        writer.add_page(page)
+        width = float(page.mediabox.width)
+        height = float(page.mediabox.height)
+        overlay = _watermark_overlay(
+            width,
+            height,
+            text=text,
+            position=position,
+            opacity=opacity,
+            size=size,
+            color=color,
+        )
+        writer.pages[-1].merge_page(overlay.pages[0])
+
+    dest = Path(output)
+    with _atomic_target(dest) as tmp:
+        report(1.0, "Writing document...")
+        _write(writer, tmp)
+    return dest
+
+
+def compress_pdf(
+    source: str | os.PathLike[str],
+    output: str | os.PathLike[str],
+    *,
+    level: str = "lossless",
+    image_dpi: int | None = None,
+    password: str | None = None,
+    progress: ProgressFn | None = None,
+    cancel_event: threading.Event | None = None,
+) -> Path:
+    """Shrink a PDF without touching the source.
+
+    ``level="lossless"`` recompresses each page's content streams and writes
+    cross-reference object streams; text and images are unchanged, so it always
+    stays searchable. ``level="aggressive"`` re-renders every page to an image
+    at ``image_dpi`` and rebuilds the PDF: much smaller for scanned or image-heavy
+    files, but the text layer is lost (the output becomes an image-only PDF).
+    """
+
+    if level not in {"lossless", "aggressive"}:
+        raise InvalidInputError(
+            f"Unknown compression level: {level}",
+            user_message="Choose lossless or aggressive.",
+        )
+    resolved = _validate_pdf(source)
+    report = make_progress(progress, cancel_event)
+    if level == "aggressive":
+        return _compress_aggressive(
+            resolved, output, image_dpi=image_dpi, password=password, report=report
+        )
+
+    reader = _open_reader(resolved, password)
+    page_count = len(reader.pages)
+    writer = PdfWriter()
+    for index, page in enumerate(reader.pages):
+        report(
+            index / (page_count + 1),
+            f"Compressing page {index + 1} of {page_count}...",
+        )
+        writer.add_page(page)
+
+    # A stream that is already compressed, or uses a filter pypdf will not
+    # rewrite, simply comes back unchanged -- that is not a failure worth
+    # aborting a whole batch over, so each page is attempted independently.
+    for page in writer.pages:
+        with contextlib.suppress(Exception):
+            page.compress_content_streams(level=9)
+
+    dest = Path(output)
+    with _atomic_target(dest) as tmp:
+        report(page_count / (page_count + 1), "Writing document...")
+        _write(writer, tmp)
+    return dest
+
+
+def _compress_aggressive(
+    resolved: Path,
+    output: str | os.PathLike[str],
+    *,
+    image_dpi: int | None,
+    password: str | None,
+    report: ProgressFn,
+) -> Path:
+    """Rebuild ``resolved`` as an image-only PDF at ``image_dpi``.
+
+    Imported lazily because :mod:`src.engine.pdf_converters` imports this module
+    at load time; a top-level import here would be circular. Rendering and
+    reassembly reuse the converters' tested raster path rather than duplicating
+    the pdfium/Pillow plumbing.
+    """
+
+    import tempfile
+
+    from . import pdf_converters
+
+    dpi = int(image_dpi) if image_dpi else 150
+    if not 72 <= dpi <= 300:
+        raise InvalidInputError(
+            f"Aggressive DPI out of range: {dpi}",
+            user_message="Aggressive compression re-renders pages between "
+            "72 and 300 DPI.",
+        )
+    report(0.05, "Re-rendering pages as images (text will be lost)...")
+    with tempfile.TemporaryDirectory() as work:
+        images = pdf_converters.pdf_to_images(
+            resolved,
+            work,
+            dpi=dpi,
+            password=password,
+        )
+        if not images:
+            raise OperationFailedError(
+                "Aggressive compression produced no pages.",
+                user_message="The document could not be re-rendered for "
+                "compression.",
+            )
+        report(0.85, "Rebuilding the document...")
+        return pdf_converters.images_to_pdf(
+            [str(path) for path in images],
+            output,
+            page_size="fit",
+        )
+
+
+# --------------------------------------------------------------------------- #
+# Metadata removal
+# --------------------------------------------------------------------------- #
+#: Human field name -> the PDF ``/Info`` key it maps to. The set the UI offers
+#: a keep/drop choice for; anything outside it is dropped unconditionally.
+_METADATA_FIELDS: dict[str, str] = {
+    "title": "/Title",
+    "author": "/Author",
+    "subject": "/Subject",
+    "keywords": "/Keywords",
+    "creator": "/Creator",
+    "producer": "/Producer",
+    "creation_date": "/CreationDate",
+    "mod_date": "/ModDate",
+}
+
+
+def detect_metadata(
+    path: str | os.PathLike[str], password: str | None = None
+) -> dict:
+    """Report the metadata a document carries, for the strip tool's preview.
+
+    Returns a dict with ``fields`` (human name -> value for each populated
+    ``/Info`` key), ``has_xmp`` (whether an XML metadata stream is present),
+    ``attachments`` (count of embedded files) and ``pages``. Never raises on a
+    damaged document: it feeds a preview, so partial information beats a crash.
+    """
+
+    resolved = _validate_pdf(path)
+    out: dict = {"fields": {}, "has_xmp": False, "attachments": 0, "pages": 0}
+    try:
+        reader = _open_reader(resolved, password)
+    except Exception:  # noqa: BLE001 - preview must not fail the UI
+        return out
+
+    out["pages"] = len(reader.pages)
+    info = reader.metadata or {}
+    for name, key in _METADATA_FIELDS.items():
+        value = info.get(key)
+        if value not in (None, ""):
+            out["fields"][name] = str(value)
+
+    try:
+        root = reader.trailer["/Root"].get_object()
+        out["has_xmp"] = root.get("/Metadata") is not None
+    except Exception:  # noqa: BLE001 - trailer shape varies
+        out["has_xmp"] = False
+
+    try:
+        out["attachments"] = len(reader.attachments or {})
+    except Exception:  # noqa: BLE001 - malformed embedded-files spec
+        out["attachments"] = 0
+    return out
+
+
+def strip_metadata(
+    source: str | os.PathLike[str],
+    output: str | os.PathLike[str],
+    *,
+    password: str | None = None,
+    keep: Sequence[str] | None = None,
+    drop_attachments: bool = True,
+    progress: ProgressFn | None = None,
+    cancel_event: threading.Event | None = None,
+) -> dict:
+    """Rewrite a PDF without its document metadata.
+
+    Pages are cloned into a fresh :class:`~pypdf.PdfWriter`, so the ``/Info`
+    dictionary, the XMP metadata stream and any embedded files are simply never
+    carried over -- this *removes* metadata rather than blanking a copy, so the
+    values do not linger in orphaned objects. ``keep`` names fields (see
+    :data:`_METADATA_FIELDS`) to re-attach on the way out; ``drop_attachments``
+    toggles whether embedded files are stripped.
+
+    The return value describes what was removed so the UI can report it: a dict
+    with ``removed_fields`` (name -> old value), ``xmp_removed``,
+    ``attachments_removed`` and ``pages``.
+    """
+
+    resolved = _validate_pdf(source)
+    reader = _open_reader(resolved, password)
+    report = make_progress(progress, cancel_event, lo=0.1, hi=0.85)
+    dest = Path(output)
+
+    report(0.0, "Reading document...")
+    info = reader.metadata or {}
+    original: dict[str, str] = {}
+    for name, key in _METADATA_FIELDS.items():
+        value = info.get(key)
+        if value not in (None, ""):
+            original[name] = str(value)
+
+    try:
+        original_xmp = reader.trailer["/Root"].get_object().get("/Metadata") is not None
+    except Exception:  # noqa: BLE001
+        original_xmp = False
+    try:
+        original_attachments = len(reader.attachments or {})
+    except Exception:  # noqa: BLE001
+        original_attachments = 0
+
+    writer = PdfWriter()
+    total = len(reader.pages)
+    for position, page in enumerate(reader.pages):
+        # Each page boundary doubles as the cancellation checkpoint.
+        report(position / max(total, 1), f"Copying page {position + 1} of {total}...")
+        writer.add_page(page)
+
+    # Re-attach only the fields the caller chose to keep; everything else stays
+    # off the fresh writer, which is what makes the removal real.
+    keep_names = {name.lower() for name in (keep or []) if name.lower() in _METADATA_FIELDS}
+    retained = {
+        _METADATA_FIELDS[name]: original[name]
+        for name in keep_names
+        if name in original
+    }
+    if retained:
+        writer.add_metadata(retained)
+    # pypdf stamps "/Producer: pypdf" into every writer on construction. It is
+    # the library's own signature rather than the document's metadata, so an
+    # emptied /Info is what makes "metadata removed" true rather than partial.
+    for key in [k for k in writer._info if str(k) not in retained]:  # noqa: SLF001
+        del writer._info[key]
+
+    report(0.9, "Writing cleaned document...")
+    with _atomic_target(dest) as tmp:
+        _write(writer, tmp)
+
+    removed_fields = {
+        name: value for name, value in original.items() if name not in keep_names
+    }
+    return {
+        "removed_fields": removed_fields,
+        "kept_fields": sorted(keep_names),
+        "xmp_removed": bool(original_xmp),
+        "attachments_removed": original_attachments if drop_attachments else 0,
+        "pages": total,
+    }

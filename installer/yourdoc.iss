@@ -8,7 +8,7 @@
 ; drifts from app.py's __version__, so an installer gets built and shipped with
 ; the wrong number in Apps & features and the file name. Compile through
 ; build_installer.py, or pass it yourself:
-;     ISCC.exe installer\yourdoc.iss /DAppVersion=1.3.0
+;     ISCC.exe installer\yourdoc.iss /DAppVersion=1.4.0
 ;
 ; Requires Inno Setup 6.3 or newer (for x64compatible). The script installs
 ; per-user by default so no administrator prompt is needed, but offers the
@@ -115,6 +115,12 @@ Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion
 ; removed for free software signed with a self-signed certificate, so the fix
 ; is documented next to the application rather than argued with on screen.
 Source: "..\installer\TRUSTING.md"; DestDir: "{app}"; DestName: "Trusting the Pryonx certificate.txt"; Flags: ignoreversion
+; The self-signed public certificate itself. Recipients are given only this
+; installer, so the "install the certificate" guide cannot point at a separate
+; download -- the .cer has to be in the folder the guide lives in. Produced by
+; build_installer.py (and the CI windows job) into dist/. Skipped for an
+; unsigned build, where there is no certificate to ship and no warning to fix.
+Source: "..\dist\Pryonx.cer"; DestDir: "{app}"; DestName: "Pryonx.cer"; Flags: ignoreversion skipifsourcedoesntexist
 
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExeName}"; \

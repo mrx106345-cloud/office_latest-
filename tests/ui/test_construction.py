@@ -28,10 +28,29 @@ def test_screen_constructs(shell, key: str) -> None:
 def test_all_tools_are_registered() -> None:
     keys = [cls.key for cls in views.VIEW_CLASSES]
     assert len(keys) == len(set(keys)), "duplicate tool keys"
-    # Nine conversion tools. PDF -> Word is back: it is implemented on
-    # pdfplumber + python-docx, so it no longer needs the AGPL PyMuPDF stack
-    # that pdf2docx hard-depended on.
-    assert len(keys) == 9, f"expected 9 tools, found {len(keys)}"
+    # The shipped tool set must include these. It is a subset check rather
+    # than a fixed count so that adding a milestone tool does not silently
+    # break the registration guard -- the uniqueness assertion above is what
+    # catches an accidental duplicate.
+    expected = {
+        "merge",
+        "split",
+        "rotate",
+        "extract_pages",
+        "watermark",
+        "compress",
+        "pdf_to_word",
+        "pdf_ocr_to_word",
+        "pdf_to_excel",
+        "pdf_to_images",
+        "images_to_pdf",
+        "word_to_pdf",
+        "excel_to_pdf",
+        "word_to_excel",
+        "excel_to_word",
+        "strip_metadata",
+    }
+    assert expected <= set(keys), f"missing tools: {sorted(expected - set(keys))}"
     assert "pdf_to_word" in keys, "PDF->Word must be offered as a tool"
     assert "edit_pdf" not in keys, "the editor must not be offered as a tool"
 

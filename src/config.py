@@ -24,10 +24,13 @@ from dataclasses import asdict, dataclass, fields
 from datetime import datetime
 from pathlib import Path
 
+from .engine.limits import Caps, STANDARD
+
 __all__ = [
     "AppConfig",
     "HistoryEntry",
     "HistoryLog",
+    "BatchLog",
     "POINTER_FILENAME",
     "default_data_dir",
 ]
@@ -35,6 +38,11 @@ __all__ = [
 APP_DIR_NAME = "YourDoc"
 CONFIG_FILENAME = "config.json"
 HISTORY_FILENAME = "history.jsonl"
+
+#: Plain-text, timestamped log written by batch / watch / the CLI. Unlike the
+#: history file it is always on: automation needs a durable record a scheduled
+#: job can be diagnosed from, and it is local text the user may read or delete.
+BATCH_LOG_FILENAME = "batch.log"
 
 #: Bootstrap file kept in the *default* location recording a relocated data
 #: folder. Without it the choice would be lost on restart: the setting lives
@@ -151,6 +159,65 @@ class AppConfig:
     #: trusted for anything - the payload inside ``license_key`` is canonical.
     license_holder: str = ""
 
+    #: Edition string from the verified key (``"standard"`` / ``"enterprise"``),
+    #: cached for display and to pick the cap tier. :meth:`caps` trusts it, so
+    #: :meth:`AppConfig.sync_license` rewrites it from the verified key on every
+    #: launch; a hand-edit here is reverted before it can raise the tier.
+    license_edition: str = ""
+
+    # ------------------------------------------------------------------ #
+    # Optional per-installation cap overrides (see :mod:`src.engine.limits`).
+    # ``None`` means "use the tier/default". An override can only *tighten* a
+    # bounded tier, never raise a standard seat into enterprise territory.
+    # ------------------------------------------------------------------ #
+    max_sheet_rows: int | None = None
+    max_sheet_columns: int | None = None
+    max_total_pixels: int | None = None
+
+    # ------------------------------------------------------------------ #
+    # Derived cap profile
+    # ------------------------------------------------------------------ #
+    @property
+    def caps(self) -> "Caps":
+        """The resolved cap profile for this installation.
+
+        Combines the license edition (tier) with any tighter local overrides so
+        the engine, batch adapters and CLI all read the same numbers. An
+        unactivated install gets the ``standard`` tier, which is exactly the
+        shipped defaults.
+        """
+
+        overrides: dict[str, int | None] = {}
+        for name in ("max_sheet_rows", "max_sheet_columns", "max_total_pixels"):
+            value = getattr(self, name)
+            if value is not None:
+                overrides[name] = int(value)
+        return Caps(edition=self.license_edition or STANDARD, overrides=overrides)
+
+    def sync_license(self, info: object) -> bool:
+        """Snap the cached license display fields back to a verified key.
+
+        :attr:`caps` reads ``license_edition`` to pick the cap tier, so a
+        hand-edited ``config.json`` must not be able to leave a *standard* seat
+        reporting ``enterprise`` and thereby unlock the enterprise ceilings
+        without paying for them. Every place that cryptographically verifies the
+        stored key (the GUI and automation gates) calls this immediately after,
+        overwriting the cached edition -- and holder -- with the value the
+        Ed25519 signature actually attests to. Returns whether anything changed,
+        so the caller only rewrites the file when there is something to fix.
+        """
+
+        changed = False
+        edition = getattr(info, "edition", "") or STANDARD
+        if self.license_edition != edition:
+            self.license_edition = edition
+            changed = True
+        holder = getattr(info, "holder", "")
+        if self.license_holder != holder:
+            self.license_holder = holder
+            changed = True
+        return changed
+
     # ------------------------------------------------------------------ #
     # Paths
     # ------------------------------------------------------------------ #
@@ -191,6 +258,12 @@ class AppConfig:
         """Absolute path of the optional ``history.jsonl`` log."""
 
         return self.resolved_data_dir / HISTORY_FILENAME
+
+    @property
+    def log_path(self) -> Path:
+        """Absolute path of the ``batch.log`` automation journal."""
+
+        return self.resolved_data_dir / BATCH_LOG_FILENAME
 
     def output_directory(self) -> Path | None:
         """The preferred output folder, or ``None`` to save next to the source."""
@@ -240,6 +313,16 @@ class AppConfig:
                 setattr(config, key, _as_bool(value))
             elif isinstance(current, str):
                 setattr(config, key, value if isinstance(value, str) else str(value))
+            elif current is None:
+                # Optional integer cap override: accept a whole number, ignore
+                # anything else (junk must never brick the app).
+                if value is None:
+                    setattr(config, key, None)
+                else:
+                    try:
+                        setattr(config, key, int(value))
+                    except (TypeError, ValueError):
+                        pass
         if pointer is not None:
             # The pointer is authoritative: reflect the real location even if
             # the stored value was edited by hand.
@@ -425,3 +508,81 @@ class HistoryLog:
             self.path.write_text("\n".join(keep) + "\n", encoding="utf-8")
         except OSError:
             pass
+
+
+class BatchLog:
+    """Plain-text, timestamped journal for batch / watch / CLI runs.
+
+    A sibling of :class:`HistoryLog` with a different job: history is a
+    privacy-gated per-tool audit the user can switch off, whereas automation
+    needs a durable ``YYYY-MM-DD HH:MM:SS message`` trail a scheduled job can
+    be diagnosed from long after it ran. Lines are appended, never rewritten,
+    and the file is size-trimmed so an always-on watch session cannot grow it
+    without bound. Every failure is swallowed -- logging must never fail a job
+    that already succeeded.
+    """
+
+    #: Trim once the log passes this many bytes, keeping the newest tail.
+    MAX_BYTES = 512 * 1024
+    #: How much of the tail to keep on a trim (bytes read from the end).
+    KEEP_BYTES = 256 * 1024
+
+    def __init__(self, path: Path) -> None:
+        self.path = Path(path)
+
+    def append(self, message: str) -> bool:
+        """Write one timestamped line. Returns whether anything was written."""
+
+        line = f"{datetime.now():%Y-%m-%d %H:%M:%S}  {message}"
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self._trim_if_needed()
+            with self.path.open("a", encoding="utf-8") as stream:
+                stream.write(line + "\n")
+        except OSError:
+            return False
+        return True
+
+    def read_tail(self, limit: int = 200) -> list[str]:
+        """The most recent ``limit`` lines, oldest first (never raises)."""
+
+        try:
+            text = self.path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return []
+        lines = [line for line in text.splitlines() if line.strip()]
+        if limit is not None and limit > 0:
+            lines = lines[-limit:]
+        return lines
+
+    def size(self) -> int:
+        """Size of the log in bytes, or 0 when absent."""
+
+        try:
+            return self.path.stat().st_size
+        except OSError:
+            return 0
+
+    def clear(self) -> bool:
+        """Delete the log. Returns whether it is gone afterwards."""
+
+        try:
+            self.path.unlink(missing_ok=True)
+        except OSError:
+            return False
+        return True
+
+    def _trim_if_needed(self) -> None:
+        """Drop the oldest bytes once the log exceeds :attr:`MAX_BYTES`."""
+
+        try:
+            if self.path.stat().st_size < self.MAX_BYTES:
+                return
+            with self.path.open("rb") as stream:
+                stream.seek(-self.KEEP_BYTES, os.SEEK_END)
+                stream.readline()  # discard a possibly partial first line
+                tail = stream.read()
+            self.path.write_bytes(tail)
+        except OSError:
+            pass
+

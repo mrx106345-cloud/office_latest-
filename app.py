@@ -41,9 +41,10 @@ from src.engine.task_runner import TaskRunner  # noqa: E402
 from src.ui import branding  # noqa: E402
 from src.ui import components as ui  # noqa: E402
 from src.ui import splash, theme, views  # noqa: E402
+from src.ui.automation import BatchView, WatchView  # noqa: E402
 from src.ui.settings_view import SettingsView  # noqa: E402
 
-__version__ = "1.3.0"
+__version__ = "1.4.0"
 APP_NAME = branding.APP_NAME
 
 
@@ -112,7 +113,185 @@ def _cli_activate(key: str) -> int:
     config = AppConfig.load()
     config.license_key = key
     config.license_holder = info.holder
+    config.license_edition = info.edition
     config.save()
+    return 0
+
+
+# --------------------------------------------------------------------------- #
+# Automation CLI: headless batch (and watch) -- the Task Scheduler entry point
+# --------------------------------------------------------------------------- #
+#: Automation is a paid, per-seat feature: refuse to run it on a machine that
+#: has not been activated, rather than silently producing nothing. The stored
+#: key is re-verified against *this* machine every call, so a key copied from
+#: another install does not unlock automation.
+def _automation_license_gate() -> int:
+    """Return 0 when automation may run, or an exit code after explaining why not."""
+
+    key = AppConfig.load().license_key
+    if not key:
+        print(
+            "Automation needs an activated license. Run:\n"
+            f"    {Path(sys.executable).name} --activate <license-key>",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        info = licensing.verify_key(key)
+    except licensing.LicenseError as exc:
+        print(exc.user_message, file=sys.stderr)
+        return 1
+    # Re-sync the cached edition from the *verified* key so a hand-edited
+    # config.json cannot leave a standard seat resolving enterprise caps.
+    config = AppConfig.load()
+    if config.sync_license(info):
+        config.save()
+    return 0
+
+
+def _cli_batch(argv: list[str]) -> int:
+    """Run one operation across many files with no window, and exit.
+
+    Driven by Windows Task Scheduler or cron. The *exit code* and the journal
+    file are the authoritative result -- a windowed (noconsole) build has no
+    attached console, so ``print`` is best-effort for the source-tree case only.
+    Exit codes: ``0`` everything succeeded, ``1`` fatal (unlicensed, unknown op,
+    nothing to do, bad input), ``2`` the run completed but some item failed.
+    """
+
+    import argparse
+
+    from src.engine import batch as batch_engine
+
+    parser = argparse.ArgumentParser(
+        prog="YourDoc batch",
+        description="Apply one YourDoc operation to a file or folder, headlessly.",
+    )
+    parser.add_argument("--op", required=True,
+                        help="operation key (see the batch screen; e.g. pdf_to_word)")
+    parser.add_argument("--in", dest="inputs", required=True, action="append",
+                        metavar="PATH", help="input file or folder (repeatable)")
+    parser.add_argument("--out", dest="output", default=None, metavar="DIR",
+                        help="output folder (default: alongside the input)")
+    parser.add_argument("--pattern", default=None,
+                        help='name filter for folder inputs, e.g. "*.pdf"')
+    parser.add_argument("--recursive", action="store_true",
+                        help="also descend into subfolders")
+    parser.add_argument("--pages", default=None,
+                        help="page spec, e.g. 1-3,5 (blank = all pages)")
+    parser.add_argument("--lang", default="eng", help="OCR language code (default eng)")
+    parser.add_argument("--password", default=None, help="source PDF password, if any")
+    parser.add_argument("--log", dest="log_path", default=None,
+                        help="journal file (default: the app's batch.log)")
+    ns = parser.parse_args(argv)
+
+    spec = batch_engine.OPERATIONS.get(ns.op)
+    if spec is None:
+        choices = ", ".join(sorted(batch_engine.OPERATIONS))
+        print(f"Unknown operation '{ns.op}'. Choose one of: {choices}", file=sys.stderr)
+        return 1
+
+    gate = _automation_license_gate()
+    if gate:
+        return gate
+
+    files = batch_engine.expand_inputs(
+        ns.inputs, pattern=ns.pattern, recursive=ns.recursive,
+        suffixes=spec["input_suffixes"],
+    )
+    if not files:
+        print("No matching inputs were found for that path.", file=sys.stderr)
+        return 1
+
+    if ns.output:
+        out_dir = Path(ns.output).expanduser()
+    else:
+        anchor = Path(ns.inputs[0]).expanduser()
+        out_dir = anchor if anchor.is_dir() else anchor.parent
+
+    options: dict = {"lang": ns.lang, "password": ns.password,
+                     "caps": AppConfig.load().caps}
+    if ns.pages:
+        options["pages"] = ns.pages
+        options["spec"] = ns.pages
+
+    report = batch_engine.run_batch_logged(
+        ns.op, ns.inputs, out_dir, options=options, pattern=ns.pattern,
+        recursive=ns.recursive, log_path=ns.log_path,
+    )
+
+    print(report.summary())
+    for item in report.items:
+        if item.status != "ok":
+            print(f"  {item.status}: {item.label} [{item.reason}]", file=sys.stderr)
+    return 2 if (report.failed or report.skipped or report.cancelled) else 0
+
+
+def _cli_watch(argv: list[str]) -> int:
+    """Watch a folder headlessly until Ctrl-C, processing files as they land.
+
+    Same licensing gate and journal as ``batch``; each stable file runs through
+    the batch engine, so results and log lines look exactly like a batch run of
+    one file. Archiving moves each processed file into ``processed/`` inside
+    the watched folder unless ``--no-archive`` is given.
+    """
+
+    import argparse
+
+    from src.engine import batch as batch_engine, watcher
+
+    parser = argparse.ArgumentParser(
+        prog="YourDoc watch",
+        description="Process files dropped into a folder, until Ctrl-C.",
+    )
+    parser.add_argument("--folder", required=True, help="folder to watch")
+    parser.add_argument("--op", required=True, help="batch operation key")
+    parser.add_argument("--out", dest="output", default=None,
+                        help="output folder (default: <folder>/output)")
+    parser.add_argument("--pattern", default=None, help='name filter, e.g. "*.pdf"')
+    parser.add_argument("--interval", type=float, default=5.0,
+                        help="poll seconds (default 5)")
+    parser.add_argument("--no-archive", action="store_true",
+                        help="leave processed files in place instead of moving them")
+    parser.add_argument("--pages", default=None, help="page spec, e.g. 1-3,5")
+    parser.add_argument("--lang", default="eng", help="OCR language code")
+    parser.add_argument("--password", default=None, help="source PDF password")
+    parser.add_argument("--log", dest="log_path", default=None,
+                        help="journal file (default: the app's batch.log)")
+    ns = parser.parse_args(argv)
+
+    if ns.op not in batch_engine.OPERATIONS:
+        choices = ", ".join(sorted(batch_engine.OPERATIONS))
+        print(f"Unknown operation '{ns.op}'. Choose one of: {choices}", file=sys.stderr)
+        return 1
+
+    gate = _automation_license_gate()
+    if gate:
+        return gate
+
+    options: dict = {"lang": ns.lang, "password": ns.password,
+                     "caps": AppConfig.load().caps}
+    if ns.pages:
+        options["pages"] = ns.pages
+        options["spec"] = ns.pages
+
+    try:
+        config = watcher.SessionConfig(
+            folder=ns.folder, operation=ns.op, output_dir=ns.output,
+            pattern=ns.pattern, interval_seconds=ns.interval,
+            archive=not ns.no_archive, options=options, log_path=ns.log_path,
+        )
+    except ValueError as exc:  # unknown op or missing folder
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    session = watcher.WatchSession(config, on_event=lambda message: print(message))
+    print("Press Ctrl-C to stop.")
+    try:
+        session.run()
+    except KeyboardInterrupt:
+        session.stop()
+        print("Stopped.")
     return 0
 
 
@@ -551,6 +730,7 @@ class ActivationDialog(ctk.CTkToplevel):
         config = AppConfig.load()
         config.license_key = key
         config.license_holder = info.holder
+        config.license_edition = info.edition
         config.save()
         self.activated = True
         self.destroy()
@@ -591,6 +771,16 @@ class AppShell(ctk.CTkFrame):
         self._home: HomeView | None = None
         self._settings: SettingsView | None = None
         self._help: HelpView | None = None
+        self._batch: BatchView | None = None
+        self._watch: WatchView | None = None
+        #: Named whole-window frames reached from the Automation sidebar section.
+        self._screens = {
+            "__home__": "_home",
+            "__settings__": "_settings",
+            "__help__": "_help",
+            "__batch__": "_batch",
+            "__watch__": "_watch",
+        }
         self._shutdown_when_idle = False
         self._current_key: str | None = None
 
@@ -678,6 +868,21 @@ class AppShell(ctk.CTkFrame):
                     nav, tool_class.key, f"{tool_class.icon}  {tool_class.title}"
                 )
                 button.pack(fill="x", padx=theme.PAD_S, pady=1)
+
+        # Automation is not a tool category: these are whole-window frames the
+        # shell owns (batch today, watch later), so they get their own section
+        # rather than a BaseToolView registration.
+        ctk.CTkLabel(
+            nav, text="AUTOMATION", font=theme.font(10, bold=True),
+            text_color=theme.TEXT_FAINT, anchor="w",
+        ).pack(fill="x", padx=theme.PAD, pady=(theme.PAD, 4))
+        for key, text in (
+            ("__batch__", f"{BatchView.icon}  {BatchView.title}"),
+            ("__watch__", f"{WatchView.icon}  {WatchView.title}"),
+        ):
+            self._make_nav_button(nav, key, text).pack(
+                fill="x", padx=theme.PAD_S, pady=1
+            )
 
         footer = ctk.CTkFrame(sidebar, fg_color="transparent")
         footer.grid(row=2, column=0, sticky="ew", padx=theme.PAD, pady=theme.PAD)
@@ -790,7 +995,9 @@ class AppShell(ctk.CTkFrame):
         # Stop any task the outgoing screen was running: its widgets are about
         # to be hidden and its callbacks would update an invisible progress bar.
         current = self._views.get(self._current_key or "")
-        if current is not None:
+        if current is None and self._current_key in self._screens:
+            current = getattr(self, self._screens[self._current_key])
+        if current is not None and hasattr(current, "cancel_running"):
             current.cancel_running()
 
         view = self._resolve_view(key)
@@ -800,7 +1007,8 @@ class AppShell(ctk.CTkFrame):
         for existing in list(self._views.values()):
             if existing is not view:
                 existing.grid_remove()  # type: ignore[attr-defined]
-        for special in (self._home, self._settings, self._help):
+        for attribute in self._screens.values():
+            special = getattr(self, attribute)
             if special is not None and special is not view:
                 special.grid_remove()
 
@@ -824,6 +1032,16 @@ class AppShell(ctk.CTkFrame):
             if self._help is None:
                 self._help = HelpView(self.content)
             return self._help
+
+        if key == "__batch__":
+            if self._batch is None:
+                self._batch = BatchView(self.content, self.context)
+            return self._batch
+
+        if key == "__watch__":
+            if self._watch is None:
+                self._watch = WatchView(self.content, self.context)
+            return self._watch
 
         if key in self._views:
             return self._views[key]
@@ -890,7 +1108,11 @@ class AppShell(ctk.CTkFrame):
                 self.root.protocol("WM_DELETE_WINDOW", self._quit_when_idle)
                 self._shutdown_when_idle = True
                 return
-            for view in self._views.values():
+            for view in list(self._views.values()) + [
+                getattr(self, attribute)
+                for attribute in self._screens.values()
+                if getattr(self, attribute) is not None
+            ]:
                 if hasattr(view, "cancel_running"):
                     view.cancel_running()
             self.runner.shutdown(wait=False)
@@ -995,7 +1217,11 @@ def _license_gate(root) -> bool:
     config = AppConfig.load()
     reason: str | None = None
     try:
-        licensing.verify_key(config.license_key)
+        info = licensing.verify_key(config.license_key)
+        # Snap the cached edition back to the verified key before any tool can
+        # read config.caps, so an edited config.json cannot fake a tier.
+        if config.sync_license(info):
+            config.save()
         return True
     except licensing.LicenseError as exc:
         reason = exc.user_message
@@ -1024,6 +1250,13 @@ def main(argv: list[str] | None = None) -> int:
         return _cli_validate_key(args[1])
     if len(args) >= 2 and args[0] == "--activate":
         return _cli_activate(args[1])
+
+    # Automation CLI: same headless contract, licensed inside the subcommand
+    # (batch/watch require an activated machine, so the gate is not optional).
+    if args and args[0] == "batch":
+        return _cli_batch(args[1:])
+    if args and args[0] == "watch":
+        return _cli_watch(args[1:])
 
     want_splash = "--no-splash" not in args
 

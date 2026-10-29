@@ -41,6 +41,7 @@ from reportlab.pdfgen import canvas as _rl
 
 from . import deps, pdf_core
 from .errors import InvalidInputError, OperationFailedError, TaskCancelled
+from .limits import Caps
 from .task_runner import ProgressFn, make_progress
 
 #: The bundled Unicode typeface. reportlab can only *name* registered fonts, so
@@ -1126,7 +1127,11 @@ class SheetTruncation:
 
 
 def _used_rows(
-    worksheet, *, notes: list[SheetTruncation] | None = None, sheet: str = ""
+    worksheet,
+    *,
+    notes: list[SheetTruncation] | None = None,
+    sheet: str = "",
+    caps: Caps | None = None,
 ) -> list[list[object]]:
     """Materialise a worksheet' used range as lists of raw values.
 
@@ -1162,8 +1167,11 @@ def _used_rows(
         return [[] for _ in rows]
 
     columns_total = max_column
-    kept = rows[:_MAX_SHEET_ROWS]
-    width = min(max_column, _MAX_SHEET_COLUMNS)
+    profile = caps or Caps()
+    max_rows = profile.resolve("max_sheet_rows", _MAX_SHEET_ROWS)
+    max_columns = profile.resolve("max_sheet_columns", _MAX_SHEET_COLUMNS)
+    kept = rows[:max_rows]
+    width = min(max_column, max_columns)
 
     if notes is not None and (len(kept) < rows_total or width < columns_total):
         notes.append(
@@ -1221,7 +1229,7 @@ def _sheet_xml_targets(archive: zipfile.ZipFile) -> dict[str, str]:
 
 
 def _workbook_column_widths(
-    path: Path, sheet_names: Sequence[str]
+    path: Path, sheet_names: Sequence[str], *, caps: Caps | None = None
 ) -> dict[str, dict[int, float]]:
     """Read per-column widths straight from the workbook package.
 
@@ -1245,7 +1253,10 @@ def _workbook_column_widths(
                     # otherwise be materialised in full just to read a few KB of
                     # ``<cols>`` from the top of the part.
                     info = archive.getinfo(part)
-                    if info.file_size > _MAX_SHEET_XML_BYTES:
+                    max_xml = (caps or Caps()).resolve(
+                        "max_sheet_xml_bytes", _MAX_SHEET_XML_BYTES
+                    )
+                    if max_xml is not None and info.file_size > max_xml:
                         continue
                     with archive.open(part) as handle:
                         root = ET.fromstring(handle.read())
@@ -1543,6 +1554,7 @@ def excel_to_pdf(
     progress: ProgressFn | None = None,
     cancel_event: threading.Event | None = None,
     notes: list[SheetTruncation] | None = None,
+    caps: Caps | None = None,
 ) -> Path:
     """Convert an ``.xlsx`` workbook into a PDF, one table per sheet.
 
@@ -1591,7 +1603,7 @@ def excel_to_pdf(
 
     try:
         sheet_names = list(workbook.sheetnames)
-        column_widths = _workbook_column_widths(resolved, sheet_names)
+        column_widths = _workbook_column_widths(resolved, sheet_names, caps=caps)
         canvas = _PdfCanvas(*_A4_LANDSCAPE, _MARGIN_LANDSCAPE)
         try:
             rendered = 0
@@ -1607,7 +1619,7 @@ def excel_to_pdf(
                     0.06 + 0.8 * (position - 1) / max(total, 1),
                     f"Rendering sheet '{name}' ({position} of {total})...",
                 )
-                rows = _used_rows(workbook[name], notes=collected, sheet=name)
+                rows = _used_rows(workbook[name], notes=collected, sheet=name, caps=caps)
                 if not rows:
                     continue  # empty sheets are noise, not a table
                 sheet_rows.append(rows)
@@ -1800,6 +1812,7 @@ def excel_to_word(
     progress: ProgressFn | None = None,
     cancel_event: threading.Event | None = None,
     notes: list[SheetTruncation] | None = None,
+    caps: Caps | None = None,
 ) -> Path:
     """Convert an ``.xlsx`` workbook into a ``.docx`` document.
 
@@ -1862,7 +1875,7 @@ def excel_to_word(
                 0.08 + 0.04 * (position - 1) / max(len(workbook.sheetnames), 1),
                 f"Reading sheet '{name}' ({position} of {len(workbook.sheetnames)})...",
             )
-            rows = _used_rows(workbook[name], notes=collected, sheet=name)
+            rows = _used_rows(workbook[name], notes=collected, sheet=name, caps=caps)
             if rows:
                 sheets.append((name, rows))
         if not sheets:

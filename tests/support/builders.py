@@ -71,6 +71,53 @@ def make_sample_pdf(
     return path
 
 
+#: The /Info dictionary :func:`make_pdf_with_metadata` stamps in, as the
+#: human field names the strip tool reports. ReportLab's own ``/Creator`` says
+#: "ReportLab", which is exactly the kind of producer fingerprint a buyer wants
+#: gone, so the fixture carries realistic values instead.
+SAMPLE_METADATA = {
+    "title": "Q3 Board Pack - CONFIDENTIAL",
+    "author": "Jane Doe",
+    "subject": "Unreleased figures",
+    "keywords": "internal, do-not-share",
+    "creator": "Back-Office Suite 3",
+    "producer": "Leaky Producer 1.2",
+}
+
+
+def make_pdf_with_metadata(
+    path: Path,
+    pages: int = 2,
+    metadata: dict[str, str] | None = None,
+) -> Path:
+    """A text-layer PDF carrying a full ``/Info`` dictionary.
+
+    Built with ReportLab and then rewritten by pypdf, which is the only
+    supported way to set document info here. Feeds the metadata-removal tests.
+    """
+
+    from pypdf import PdfWriter
+
+    plain = path.with_name(path.stem + ".plain.pdf")
+    make_sample_pdf(plain, pages=pages)
+
+    fields = metadata if metadata is not None else SAMPLE_METADATA
+    key_map = {
+        "title": "/Title",
+        "author": "/Author",
+        "subject": "/Subject",
+        "keywords": "/Keywords",
+        "creator": "/Creator",
+        "producer": "/Producer",
+    }
+    writer = PdfWriter(clone_from=str(plain))
+    writer.add_metadata({key_map[name]: value for name, value in fields.items() if name in key_map})
+    with path.open("wb") as handle:
+        writer.write(handle)
+    plain.unlink(missing_ok=True)
+    return path
+
+
 def make_table_pdf(path: Path, *, pages: int = 1) -> Path:
     """Create a PDF containing a ruled table, so pdfplumber can detect it.
 

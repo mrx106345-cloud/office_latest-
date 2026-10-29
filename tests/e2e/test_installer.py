@@ -137,6 +137,28 @@ def test_installer_full_cycle(setup_exe: Path) -> None:
         assert f"{APP_NAME}.lnk" in names
         assert f"Uninstall {APP_NAME}.lnk" in names
 
+        # --- bundled trust material ----------------------------------- #
+        # Recipients are given only the Setup.exe, so everything the trust guide
+        # refers to has to be installed *with* the program -- no side downloads.
+        assert (install_dir / "Trusting the Pryonx certificate.txt").is_file(), (
+            "the certificate trust guide was not bundled into the installer"
+        )
+        # The certificate itself is only produced for a signed build; assert it
+        # accompanies the guide exactly when the payload carries a signature, so
+        # the "double-click Pryonx.cer" step is never pointing at a missing file.
+        signed = subprocess.run(
+            [
+                "powershell.exe", "-NoProfile", "-Command",
+                f"(Get-AuthenticodeSignature -FilePath '{exe}').SignatureStatus",
+            ],
+            capture_output=True, text=True, timeout=30, check=False,
+        ).stdout.strip()
+        if signed and signed not in {"NotSigned", "Error"}:
+            assert (install_dir / "Pryonx.cer").is_file(), (
+                "a signed build must bundle Pryonx.cer beside the guide that "
+                "tells the user to install it"
+            )
+
         # --- activation ------------------------------------------------ #
         # Setup ran --validate-key/--activate itself; re-checking here proves
         # the key it stored is the same one that verifies, not just that the

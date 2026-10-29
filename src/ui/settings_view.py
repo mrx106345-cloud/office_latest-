@@ -183,13 +183,50 @@ class SettingsView(ctk.CTkFrame):
         self.history_label.pack(side="left", padx=(theme.PAD, 0))
 
         # ---------------------------------------------------------------- #
+        # 4. Advanced input limits
+        # ---------------------------------------------------------------- #
+        limits_card = ui.Card(
+            outer,
+            title="4 · Advanced input limits",
+            subtitle=(
+                "Blank uses your license tier's default; a smaller number only "
+                "tightens it. A standard license cannot raise a cap."
+            ),
+        )
+        limits_card.grid(row=4, column=0, sticky="ew", padx=theme.PAD_S, pady=(0, theme.CARD_GAP))
+
+        edition = (self.config.license_edition or "standard").strip().lower()
+        self.edition_label = ctk.CTkLabel(
+            limits_card.content,
+            text=f"License edition: {edition}",
+            font=theme.font(11, bold=True), text_color=theme.TEXT_MUTED, anchor="w",
+        )
+        self.edition_label.pack(anchor="w", pady=(0, 6))
+
+        limit_row = ctk.CTkFrame(limits_card.content, fg_color="transparent")
+        limit_row.pack(fill="x")
+        self.max_rows_entry = ui.LabeledEntry(
+            limit_row, "Max sheet rows", placeholder="tier default",
+        )
+        self.max_rows_entry.pack(side="left", fill="x", expand=True, padx=(0, 8))
+        self.max_columns_entry = ui.LabeledEntry(
+            limit_row, "Max sheet columns", placeholder="tier default",
+        )
+        self.max_columns_entry.pack(side="left", fill="x", expand=True, padx=(0, 8))
+        self.max_pixels_entry = ui.LabeledEntry(
+            limit_row, "Max image pixels", placeholder="tier default",
+        )
+        self.max_pixels_entry.pack(side="left", fill="x", expand=True)
+        self._load_limit_fields()
+
+        # ---------------------------------------------------------------- #
         # Privacy footnote
         # ---------------------------------------------------------------- #
         # Deliberately not a numbered card. It is assurance, not a setting, and
         # as its own section it cost a header plus a border for text that reads
         # fine as a footnote -- pushing the Save row below the fold.
         privacy = ctk.CTkFrame(outer, fg_color="transparent")
-        privacy.grid(row=4, column=0, sticky="ew", padx=theme.PAD_S + 4, pady=(0, theme.PAD_S))
+        privacy.grid(row=5, column=0, sticky="ew", padx=theme.PAD_S + 4, pady=(0, theme.PAD_S))
         privacy_label = ctk.CTkLabel(
             privacy,
             text=(
@@ -259,6 +296,37 @@ class SettingsView(ctk.CTkFrame):
 
     def _on_history_toggle(self, _value: bool) -> None:
         self._refresh_paths()
+
+    # -- advanced input limits ------------------------------------------- #
+    @staticmethod
+    def _parse_limit(entry: ui.LabeledEntry, name: str) -> tuple[int | None, str | None]:
+        """Read one limit field: ``(value, error)``.
+
+        Blank means "no override" (``None``); a positive whole number is an
+        override; anything else is a validation error. An override can only
+        ever *tighten* the tier default -- see :class:`src.engine.limits.Caps`.
+        """
+
+        raw = entry.get()
+        if not raw:
+            return None, None
+        try:
+            value = int(raw)
+        except ValueError:
+            return None, f"'{name}' must be a whole number, or blank for the default."
+        if value <= 0:
+            return None, f"'{name}' must be greater than zero, or blank for the default."
+        return value, None
+
+    def _load_limit_fields(self) -> None:
+        """Populate the three override entries from the live config."""
+
+        self.max_rows_entry.set("" if self.config.max_sheet_rows is None
+                                else str(self.config.max_sheet_rows))
+        self.max_columns_entry.set("" if self.config.max_sheet_columns is None
+                                   else str(self.config.max_sheet_columns))
+        self.max_pixels_entry.set("" if self.config.max_total_pixels is None
+                                  else str(self.config.max_total_pixels))
 
     def _reset_data_dir(self) -> None:
         self.config.data_dir = ""
@@ -338,6 +406,15 @@ class SettingsView(ctk.CTkFrame):
         self.config.auto_rename_outputs = self.auto_rename.get()
         self.config.remember_last_dir = self.remember_dir.get()
         self.config.history_enabled = self.history_switch.get()
+        self.config.max_sheet_rows, _ = self._parse_limit(
+            self.max_rows_entry, "Max sheet rows"
+        )
+        self.config.max_sheet_columns, _ = self._parse_limit(
+            self.max_columns_entry, "Max sheet columns"
+        )
+        self.config.max_total_pixels, _ = self._parse_limit(
+            self.max_pixels_entry, "Max image total pixels"
+        )
         return self.config
 
     def validate(self) -> str | None:
@@ -350,6 +427,14 @@ class SettingsView(ctk.CTkFrame):
             parent = Path(chosen).expanduser()
             if parent.exists() and not parent.is_dir():
                 return f"{parent} is a file, not a folder."
+        for entry, name in (
+            (self.max_rows_entry, "Max sheet rows"),
+            (self.max_columns_entry, "Max sheet columns"),
+            (self.max_pixels_entry, "Max image total pixels"),
+        ):
+            _, error = self._parse_limit(entry, name)
+            if error:
+                return error
         return None
 
     def save(self) -> None:
@@ -403,6 +488,10 @@ class SettingsView(ctk.CTkFrame):
         self.config.remember_last_dir = loaded.remember_last_dir
         self.config.history_enabled = loaded.history_enabled
         self.config.last_input_dir = loaded.last_input_dir
+        self.config.license_edition = loaded.license_edition
+        self.config.max_sheet_rows = loaded.max_sheet_rows
+        self.config.max_sheet_columns = loaded.max_sheet_columns
+        self.config.max_total_pixels = loaded.max_total_pixels
 
         self.next_to_source.set(not loaded.output_dir)
         self.output_picker.set(loaded.output_dir)
@@ -410,6 +499,10 @@ class SettingsView(ctk.CTkFrame):
         self.auto_rename.set(loaded.auto_rename_outputs)
         self.remember_dir.set(loaded.remember_last_dir)
         self.history_switch.set(loaded.history_enabled)
+        self.edition_label.configure(
+            text=f"License edition: {(loaded.license_edition or 'standard').strip().lower()}"
+        )
+        self._load_limit_fields()
         self._on_next_to_source(self.next_to_source.get())
         self._refresh_paths()
         self.banner.set("Reloaded from disk.", "idle")

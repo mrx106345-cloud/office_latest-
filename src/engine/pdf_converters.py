@@ -15,7 +15,7 @@ import threading
 from collections.abc import Sequence
 from pathlib import Path
 
-from . import deps, pdf_core
+from . import deps, ocr, pdf_core
 from .errors import (
     EncryptedPDFError,
     InvalidInputError,
@@ -26,6 +26,7 @@ from .errors import (
     YourDocError,
 )
 from .task_runner import ProgressFn, make_progress
+from .limits import Caps
 
 __all__ = [
     "pdf_to_word",
@@ -281,6 +282,22 @@ def pdf_to_excel(
     return dest, len(writable)
 
 
+def _ocr_page_text(document, index: int, *, lang: str, dpi: int) -> str:
+    """Recognize the text of one rendered page via Tesseract.
+
+    ``document`` is an already-open pypdfium2 document owned by the caller (it
+    is opened once per :func:`pdf_to_word` run, not per page). The rendered PIL
+    image is closed here so a long OCR pass does not pin every rasterised page.
+    """
+
+    image = ocr.render_page_to_image(document, index, dpi=dpi)
+    try:
+        return ocr.ocr_image(image, lang=lang) or ""
+    finally:
+        with contextlib.suppress(Exception):
+            image.close()
+
+
 # --------------------------------------------------------------------------- #
 # PDF -> Word
 # --------------------------------------------------------------------------- #
@@ -290,6 +307,9 @@ def pdf_to_word(
     *,
     pages: str | None = None,
     password: str | None = None,
+    ocr: bool = False,
+    ocr_lang: str = "eng",
+    ocr_dpi: int = 300,
     progress: ProgressFn | None = None,
     cancel_event: threading.Event | None = None,
 ) -> Path:
@@ -298,8 +318,9 @@ def pdf_to_word(
     ``pdfplumber`` supplies the text and tables and ``python-docx`` writes the
     result. This reads the PDF's *text layer*, so it reproduces content and
     reading order rather than the exact page layout: multi-column pages and
-    floating boxes are linearised. A scanned PDF has no text layer and is
-    refused outright rather than silently producing an empty document.
+    floating boxes are linearised. A scanned PDF has no text layer, so pass
+    ``ocr=True`` to recognize those pages with Tesseract (the native binary must
+    be installed -- see :mod:`src.engine.ocr`).
 
     Parameters
     ----------
@@ -307,6 +328,12 @@ def pdf_to_word(
         Optional page window, e.g. ``"1,3,5-7"``. Blank means every page.
     password:
         Password for an encrypted PDF.
+    ocr:
+        Recognize pages that carry no text layer via Tesseract before writing.
+    ocr_lang:
+        Tesseract language code used for OCR (default English).
+    ocr_dpi:
+        Render resolution fed to Tesseract. Around 300 suits most scans.
 
     Returns
     -------
@@ -325,6 +352,7 @@ def pdf_to_word(
     dest = Path(output)
 
     report(0.0, "Opening document...")
+    ocr_document = None
     try:
         # An empty string is not a valid password for pdfplumber, so the
         # keyword is only passed when one was actually supplied.
@@ -336,6 +364,11 @@ def pdf_to_word(
                     "No pages selected.",
                     user_message="No valid pages were selected for conversion.",
                 )
+
+            # Opened once for the whole run so a many-page OCR does not re-decode
+            # the file per page. Only touched when OCR is actually requested.
+            if ocr:
+                ocr_document = _open_pdfium(resolved, password)
 
             document = docx.Document()
             normal = document.styles["Normal"]
@@ -358,6 +391,18 @@ def pdf_to_word(
                     for table in page.extract_tables()
                     if table and any(any(cell for cell in row) for row in table)
                 ]
+
+                # A page with neither text nor tables is a scan candidate. OCR it
+                # when the caller opted in; a text-layer page never reaches here.
+                if not text.strip() and not tables and ocr_document is not None:
+                    report(
+                        (position - 1) / len(indices),
+                        f"OCR page {index + 1} of {len(indices)}...",
+                    )
+                    text = _ocr_page_text(
+                        ocr_document, index, lang=ocr_lang, dpi=ocr_dpi
+                    )
+
                 if text.strip() or tables:
                     filled += 1
 
@@ -389,8 +434,9 @@ def pdf_to_word(
                     "No text layer in the selected pages.",
                     user_message=(
                         f"'{resolved.name}' has no readable text, which usually "
-                        "means it is a scan. Run OCR on it first, then convert "
-                        "it again."
+                        "means it is a scan. Turn on OCR (the PDF to Word screen "
+                        "has an OCR option, or use 'Scanned PDF to Word') to "
+                        "recognize the pages."
                     ),
                 )
 
@@ -414,6 +460,10 @@ def pdf_to_word(
                 "The PDF may be encrypted or have an unsupported layout."
             ),
         ) from exc
+    finally:
+        if ocr_document is not None:
+            with contextlib.suppress(Exception):
+                ocr_document.close()
 
     return dest
 
@@ -572,6 +622,7 @@ def images_to_pdf(
     page_size: str = "fit",
     progress: ProgressFn | None = None,
     cancel_event: threading.Event | None = None,
+    caps: Caps | None = None,
 ) -> Path:
     """Combine images into a single PDF, one page per image, in order.
 
@@ -621,7 +672,7 @@ def images_to_pdf(
         # over-budget batch is refused rather than exhausting memory on the way
         # to failing. Decoded budget is deliberately 1/3 of the raw pixel cap:
         # width x height x 3 bytes is what a decoded RGB image actually costs.
-        budget_pixels = _MAX_TOTAL_PIXELS
+        budget_pixels = (caps or Caps()).resolve("max_total_pixels", _MAX_TOTAL_PIXELS)
         running_pixels = 0
         for path in resolved_inputs:
             try:
@@ -629,7 +680,7 @@ def images_to_pdf(
                     running_pixels += probe.width * probe.height
             except Exception:  # noqa: BLE001 - reported properly during the load
                 continue
-            if running_pixels > budget_pixels:
+            if budget_pixels is not None and running_pixels > budget_pixels:
                 raise InvalidInputError(
                     f"Images total {running_pixels:,} pixels, over the "
                     f"{budget_pixels:,} limit.",

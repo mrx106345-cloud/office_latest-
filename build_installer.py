@@ -408,6 +408,51 @@ def sign_app(*, required: bool) -> bool:
     return sign_setup(app_exe, required=required)
 
 
+def export_signer_cert(dest: Path) -> bool:
+    """Write the signing certificate's PUBLIC form to *dest* (DER-encoded).
+
+    Recipients are given only the Setup.exe, so the certificate the trust guide
+    tells them to install cannot be a separate download -- it has to be bundled
+    inside the installer (see the [Files] entry in installer/yourdoc.iss). This
+    mirrors the CI step that emits ``dist/Pryonx.cer``.
+
+    It reads the certificate back off the *already signed* executable rather
+    than re-opening the key material, so it works the same whether the build was
+    signed from a ``.pfx`` or a store thumbprint. Returns ``False`` when the
+    application is not signed, leaving no ``.cer`` behind -- the installer then
+    simply ships without one (the [Files] entry skips a missing source).
+    """
+
+    app_exe = frozen_app_path()
+    if not app_exe.is_file():
+        return False
+
+    script = r"""
+$ErrorActionPreference = 'Stop'
+$sig = Get-AuthenticodeSignature -FilePath $env:YOURDOC_EXPORT_TARGET
+$cert = $sig.SignerCertificate
+if (-not $cert) { exit 1 }
+[IO.File]::WriteAllBytes($env:YOURDOC_EXPORT_DEST, $cert.Export('Cert'))
+"""
+    env = dict(os.environ)
+    env["YOURDOC_EXPORT_TARGET"] = str(app_exe)
+    env["YOURDOC_EXPORT_DEST"] = str(dest)
+    try:
+        result = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
+            check=False,
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+    except OSError:
+        return False
+    if result.returncode != 0 or not dest.is_file():
+        return False
+    print(f"  public certificate exported: {dest.name}")
+    return True
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse command-line options."""
 
@@ -475,6 +520,10 @@ def main(argv: list[str] | None = None) -> int:
     # unsigned, and Defender flagged it. Sign, then compile, then sign the
     # installer itself.
     sign_app(required=args.require_signature)
+
+    # Recipients get only the installer, so bundle the certificate beside it:
+    # export the public form from the signed exe for yourdoc.iss to package.
+    export_signer_cert(DIST_DIR / "Pryonx.cer")
 
     print(f"Using Inno Setup compiler: {iscc}")
     setup = run_iscc(iscc, version)

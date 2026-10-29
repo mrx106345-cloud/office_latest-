@@ -29,7 +29,7 @@
 .EXAMPLE
   # Run once, from an elevated PowerShell (the script self-elevates if needed):
   .\trust-cert.ps1
-  .\trust-cert.ps1 -VerifyFile .\YourDoc-1.3.0-Setup.exe
+  .\trust-cert.ps1 -VerifyFile .\YourDoc-1.4.0-Setup.exe
 #>
 [CmdletBinding()]
 param(

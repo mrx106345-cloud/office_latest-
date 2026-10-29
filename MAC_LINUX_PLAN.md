@@ -2,7 +2,7 @@
 
 Goal: ship license-gated YourDoc as **real installer files** for macOS and Linux
 without owning a Mac and without paying Apple. The Windows build is already done
-(`dist/YourDoc-1.3.0-Setup.exe`, license-gated and signed with the self-signed
+(`dist/YourDoc-1.4.0-Setup.exe`, license-gated and signed with the self-signed
 Pryonx certificate).
 
 ---
@@ -44,9 +44,9 @@ Pryonx certificate).
    * Private repo → macOS minutes are billed at 10x weight.
 2. GitHub → **Actions** → *Build distributable installers* → **Run workflow**.
 3. Download from the run's **Artifacts**:
-   * `YourDoc-1.3.0.deb`, `YourDoc-1.3.0.rpm`
-   * `YourDoc-1.3.0.dmg`
-4. Those three files + the existing `YourDoc-1.3.0-Setup.exe` are the full
+   * `YourDoc-1.4.0.deb`, `YourDoc-1.4.0.rpm`
+   * `YourDoc-1.4.0.dmg`
+4. Those three files + the existing `YourDoc-1.4.0-Setup.exe` are the full
    distribution set. Customers receive only these.
 
 Licensing still works everywhere: the key is bound to the machine fingerprint,
@@ -89,8 +89,8 @@ when (and if) you get an account.
 `.deb`/`.rpm` have **no Apple-style signing gate**. Customers just install:
 
 ```sh
-sudo apt install ./YourDoc-1.3.0.deb      # Debian/Ubuntu/Mint
-sudo rpm -i  YourDoc-1.3.0.rpm            # Fedora/RHEL/openSUSE
+sudo apt install ./YourDoc-1.4.0.deb      # Debian/Ubuntu/Mint
+sudo rpm -i  YourDoc-1.4.0.rpm            # Fedora/RHEL/openSUSE
 ```
 
 No warning, no override, no account. This is why Linux is easy unsigned.

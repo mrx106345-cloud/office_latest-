@@ -159,9 +159,12 @@ def test_settings_is_not_empty_but_is_reasonable_in_height(shell) -> None:
     canvas = uihelp.scroll_area(scroll)
     content = canvas.winfo_children()[0]
 
-    # 1000px is a generous ceiling: enough for six blocks, but it would catch a
-    # regression that re-inflates the form back past a 1000px window.
-    assert content.winfo_height() <= 1000, (
+    # 1120px is a generous ceiling: enough for the numbered cards plus the
+    # advanced input-limits section, but it still catches a regression that
+    # re-inflates the form (a runaway block of help text) back past a tall
+    # window. The Save row lives outside the scroll area, so its reachability is
+    # asserted separately above; this only guards against absurd growth.
+    assert content.winfo_height() <= 1120, (
         f"Settings content is {content.winfo_height()}px tall; it was 1176px "
         "before the layout was tightened"
     )
@@ -195,6 +198,43 @@ def test_wrapped_labels_track_the_window_width(shell) -> None:
     assert available - wrap < 120, (
         f"hint wraps at {wrap}px inside {available}px; it should use the space"
     )
+
+
+@pytest.mark.ui
+def test_advanced_limit_overrides_round_trip(shell, isolated_appdata: Path) -> None:
+    """A typed override is validated, persisted and re-read on reload."""
+
+    settings = shell.show("__settings__")
+    settings.max_rows_entry.set("4000")
+    settings.max_columns_entry.set("64")
+    assert settings.validate() is None
+    settings.save()
+    shell.root.update_idletasks()
+
+    assert shell.config.max_sheet_rows == 4000
+    assert shell.config.max_sheet_columns == 64
+    assert shell.config.caps.overrides == {
+        "max_sheet_rows": 4000,
+        "max_sheet_columns": 64,
+    }
+
+    # Clearing and reloading from disk restores the saved numbers.
+    settings.max_rows_entry.set("")
+    settings.reload()
+    shell.root.update_idletasks()
+    assert settings.max_rows_entry.get() == "4000"
+
+
+@pytest.mark.ui
+def test_invalid_limit_override_is_rejected(shell) -> None:
+    settings = shell.show("__settings__")
+    settings.max_rows_entry.set("zero")
+    message = settings.validate()
+    assert message and "whole number" in message.lower()
+
+    settings.max_rows_entry.set("0")
+    message = settings.validate()
+    assert message and "greater than zero" in message.lower()
 
 
 @pytest.mark.ui

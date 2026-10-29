@@ -14,7 +14,7 @@ Two files, together:
 
 | File | What it is |
 | --- | --- |
-| `YourDoc-1.3.0-Setup.exe` | The installer |
+| `YourDoc-1.4.0-Setup.exe` | The installer |
 | `Pryonx.cer` | The certificate, for the optional step below |
 
 ### About the licence
@@ -78,16 +78,9 @@ is genuinely informative — it proves the file is Pryonx's and not someone else
 
 Do this once per computer, not once per install.
 
-**Fastest: run the shipped script.** Right-click `trust-cert.ps1` -> **Run with
-PowerShell** and accept the elevation prompt. It installs the certificate into
-the two stores Authenticode consults and prints the result. To check it against
-the installer itself:
-
-```powershell
-.\trust-cert.ps1 -VerifyFile .\YourDoc-1.3.0-Setup.exe
-```
-
-**Or do it by hand:**
+The certificate installs with the program as `Pryonx.cer`, in the same folder as
+`YourDoc.exe` — by default `%LOCALAPPDATA%\Programs\YourDoc`. Open that folder
+and:
 
 1. Double-click `Pryonx.cer`.
 2. Click **Install Certificate…**
@@ -117,12 +110,12 @@ your computer. Check the current one:
 Get-FileHash .\Pryonx.cer -Algorithm SHA256 | Select-Object -ExpandProperty Hash
 ```
 
-The certificate shipped with **YourDoc 1.3.0** is:
+The certificate shipped with **YourDoc 1.4.0** is:
 
 ```
-SHA-256  1190603B442948B58182234D95CCF7E1C727A134F054A4052C5D4D9D38A7CEAA
-SHA-1    A5296D0F0C30A56AB58A586FE7687C2FFE72AA6B
-Issued   2026-10-27, valid until 2036-10-25
+SHA-256  640BB9E5D1FA875F0B65CCB8F729C9806EF17E796D5CC2C1F2299F28DF6F7CED
+SHA-1    D5B12AEFCDB62C5D380B85E330C82377AAC4404B
+Issued   2026-10-28, valid until 2036-10-26
 ```
 
 ### If you installed an older Pryonx certificate
@@ -142,13 +135,13 @@ vouching for old builds is a signature that no longer means "current release".
 
 ### Checking it worked
 
-Right-click either `YourDoc-1.3.0-Setup.exe` or `YourDoc.exe` → **Properties** →
+Right-click either `YourDoc-1.4.0-Setup.exe` or `YourDoc.exe` → **Properties** →
 **Digital Signatures**. You should see a signature from **Pryonx**.
 
 In PowerShell:
 
 ```powershell
-Get-AuthenticodeSignature .\YourDoc-1.3.0-Setup.exe | Format-List Status, SignerCertificate
+Get-AuthenticodeSignature .\YourDoc-1.4.0-Setup.exe | Format-List Status, SignerCertificate
 ```
 
 `Status` reads `Valid` once the certificate is trusted.
@@ -167,7 +160,7 @@ The signature covers the file contents, independent of SmartScreen. If YourDoc
 has been modified since Pryonx released it, this check fails:
 
 ```powershell
-Get-AuthenticodeSignature .\YourDoc-1.3.0-Setup.exe | Select-Object Status
+Get-AuthenticodeSignature .\YourDoc-1.4.0-Setup.exe | Select-Object Status
 ```
 
 A modified copy reports something other than `Valid`. If the signer is anything

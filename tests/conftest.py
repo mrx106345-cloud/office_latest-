@@ -198,7 +198,12 @@ def shell(tk_root, isolated_appdata):
         # Cancel workers and stop the event bridge; the tk_root fixture handles
         # destroying the window.
         try:
-            for view in app_shell._views.values():  # noqa: SLF001
+            screens = list(app_shell._views.values()) + [  # noqa: SLF001
+                getattr(app_shell, attribute)
+                for attribute in app_shell._screens.values()  # noqa: SLF001
+                if getattr(app_shell, attribute) is not None
+            ]
+            for view in screens:
                 if hasattr(view, "cancel_running"):
                     view.cancel_running()
             app_shell.runner.shutdown(wait=False)

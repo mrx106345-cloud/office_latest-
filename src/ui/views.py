@@ -33,9 +33,12 @@ from ..engine.task_runner import TaskRunner
 from . import components as ui
 from . import theme
 
-#: Navigation categories, in sidebar order. YourDoc 1.2.0 is a flat
-#: tool set, so the sidebar has a single "Tools" section.
-CATEGORIES = ("Tools",)
+#: Navigation categories, in sidebar order. "Tools" is the flat set of
+#: single-job converters; "Automation" holds the multi-file screens (batch, and
+#: later the watch folder). The Automation screens are dedicated frames owned by
+#: the shell rather than BaseToolView entries, so they are reached by their own
+#: nav buttons, not by tools_by_category().
+CATEGORIES = ("Tools", "Automation")
 
 
 @dataclass
@@ -847,6 +850,327 @@ class MergeView(BaseToolView):
 
 
 # --------------------------------------------------------------------------- #
+# Core PDF basics (split / rotate / extract / watermark / compress)
+# --------------------------------------------------------------------------- #
+class SplitView(BaseToolView):
+    """Break one PDF into several files, per page or by a page-range list."""
+
+    key = "split"
+    title = "Split PDF"
+    subtitle = (
+        "Separate a document into individual pages or grouped ranges. "
+        "Each part is a complete, standalone PDF."
+    )
+    icon = "\u2702"
+    categories = ("Tools",)
+    extensions = frozenset({".pdf"})
+    output_mode = "directory"
+    output_suffix = "_split"
+    needs_password = True
+
+    def build_options(self, parent) -> None:
+        self.mode_combo = self.add_option(
+            lambda p: ui.LabeledCombo(
+                p, "Split by",
+                ["Every page (one file each)", "Page ranges"],
+                default="Every page (one file each)",
+            )
+        )
+        self.range_entry = self.add_option(
+            lambda p: ui.LabeledEntry(
+                p, "Ranges (blank = every page)", placeholder="e.g. 1-3, 4-6, 7-"
+            )
+        )
+
+    def snapshot_options(self) -> dict:
+        mode = "ranges" if self.mode_combo.get().startswith("Page ranges") else "each"
+        spec = self.range_entry.get().strip() or None
+        return {"mode": mode, "spec": spec, "password": self.password()}
+
+    def execute(self, paths, output, progress, cancel, options=None) -> RunResult:
+        opts = options or {}
+        results = pdf_core.split_pdf(
+            paths[0], output, mode=opts.get("mode", "each"),
+            spec=opts.get("spec"), password=opts.get("password"),
+            progress=progress, cancel_event=cancel,
+        )
+        return RunResult(
+            message=f"Split into {_plural(len(results), 'file')}",
+            outputs=results, open_target=str(Path(output)),
+        )
+
+
+class RotateView(BaseToolView):
+    """Rotate selected pages (or the whole document) by a right angle."""
+
+    key = "rotate"
+    title = "Rotate Pages"
+    subtitle = "Turn pages upright. Choose an angle and, optionally, which pages."  
+    icon = "\u21bb"
+    categories = ("Tools",)
+    extensions = frozenset({".pdf"})
+    output_mode = "file"
+    output_suffix = "_rotated.pdf"
+    output_filter = "PDF document"
+    needs_password = True
+    needs_pages = True
+    pages_label = "Pages to rotate (blank = all)"
+
+    def build_options(self, parent) -> None:
+        self.angle_combo = self.add_option(
+            lambda p: ui.LabeledCombo(
+                p, "Angle", ["90", "180", "270"], default="90"
+            )
+        )
+
+    def snapshot_options(self) -> dict:
+        return {
+            "angle": int(self.angle_combo.get()),
+            "pages": self.pages(),
+            "password": self.password(),
+        }
+
+    def execute(self, paths, output, progress, cancel, options=None) -> RunResult:
+        opts = options or {}
+        result = pdf_core.rotate_pdf(
+            paths[0], output, angle=opts.get("angle", 90),
+            pages=opts.get("pages"), password=opts.get("password"),
+            progress=progress, cancel_event=cancel,
+        )
+        return RunResult(
+            message=f"Rotated to {result.name}",
+            outputs=[result], open_target=str(result),
+        )
+
+
+class ExtractPagesView(BaseToolView):
+    """Select and reorder pages into a new document (a lightweight organize)."""
+
+    key = "extract_pages"
+    title = "Extract / Reorder Pages"
+    subtitle = (
+        "Keep only the pages you list, in the order you list them - for "
+        "example 3,1-2 puts page 3 first."
+    )
+    icon = "\u29c6"
+    categories = ("Tools",)
+    extensions = frozenset({".pdf"})
+    output_mode = "file"
+    output_suffix = "_extracted.pdf"
+    output_filter = "PDF document"
+    needs_password = True
+    needs_pages = True
+    pages_label = "Pages to keep, in order (blank = all)"
+
+    def snapshot_options(self) -> dict:
+        return {"spec": self.pages() or "all", "password": self.password()}
+
+    def execute(self, paths, output, progress, cancel, options=None) -> RunResult:
+        opts = options or {}
+        result = pdf_core.extract_pages_pdf(
+            paths[0], output, spec=opts.get("spec", "all"),
+            password=opts.get("password"), progress=progress, cancel_event=cancel,
+        )
+        total = pdf_core.pdf_info(result)["pages"]
+        return RunResult(
+            message=f"Kept {_plural(total, 'page')} in {result.name}",
+            outputs=[result], open_target=str(result),
+        )
+
+
+class WatermarkView(BaseToolView):
+    """Stamp semi-transparent text over every page, keeping the text searchable."""
+
+    key = "watermark"
+    title = "Watermark"
+    subtitle = (
+        "Overlay text such as CONFIDENTIAL or DRAFT on every page. It stays a "
+        "real text layer, so the document remains searchable."
+    )
+    icon = "\u25a8"
+    categories = ("Tools",)
+    extensions = frozenset({".pdf"})
+    output_mode = "file"
+    output_suffix = "_watermark.pdf"
+    output_filter = "PDF document"
+    needs_password = True
+
+    def build_options(self, parent) -> None:
+        self.text_entry = self.add_option(
+            lambda p: ui.LabeledEntry(p, "Watermark text", placeholder="e.g. CONFIDENTIAL"),
+            full_width=True,
+        )
+        self.position_combo = self.add_option(
+            lambda p: ui.LabeledCombo(
+                p, "Position",
+                ["Center", "Top-left", "Top-right", "Bottom-left", "Bottom-right"],
+                default="Center",
+            )
+        )
+        self.size_slider = self.add_option(
+            lambda p: ui.LabeledSlider(
+                p, "Text size", from_=12, to=144, default=48, steps=132,
+                formatter=lambda v: f"{int(v)} pt",
+            )
+        )
+        self.opacity_slider = self.add_option(
+            lambda p: ui.LabeledSlider(
+                p, "Opacity", from_=0.05, to=1.0, default=0.15, steps=19,
+                formatter=lambda v: f"{int(v * 100)}%",
+            )
+        )
+
+    def snapshot_options(self) -> dict:
+        position = self.position_combo.get().lower().replace(" ", "-")
+        return {
+            "text": self.text_entry.get(),
+            "position": position,
+            "size": int(self.size_slider.get()),
+            "opacity": float(self.opacity_slider.get()),
+            "password": self.password(),
+        }
+
+    def execute(self, paths, output, progress, cancel, options=None) -> RunResult:
+        opts = options or {}
+        if not (opts.get("text") or "").strip():
+            from src.engine.errors import InvalidInputError
+
+            raise InvalidInputError(
+                "No watermark text given.",
+                user_message="Type the text to stamp on the pages.",
+            )
+        result = pdf_core.watermark_pdf(
+            paths[0], output, text=opts["text"], position=opts.get("position", "center"),
+            opacity=opts.get("opacity", 0.15), size=opts.get("size", 48),
+            password=opts.get("password"), progress=progress, cancel_event=cancel,
+        )
+        return RunResult(
+            message=f"Watermarked to {result.name}",
+            outputs=[result], open_target=str(result),
+        )
+
+
+class CompressView(BaseToolView):
+    """Shrink a PDF, losslessly or by re-rendering pages as images."""
+
+    key = "compress"
+    title = "Compress PDF"
+    subtitle = (
+        "Make a file smaller. Lossless keeps text selectable; aggressive "
+        "rebuilds pages as images for the smallest size but drops the text layer."
+    )
+    icon = "\u2913"
+    categories = ("Tools",)
+    extensions = frozenset({".pdf"})
+    output_mode = "file"
+    output_suffix = "_compressed.pdf"
+    output_filter = "PDF document"
+    needs_password = True
+
+    def build_options(self, parent) -> None:
+        self.level_combo = self.add_option(
+            lambda p: ui.LabeledCombo(
+                p, "Level", ["Lossless (keeps text)", "Aggressive (images)"],
+                default="Lossless (keeps text)",
+            ),
+            full_width=True,
+        )
+        self.dpi_entry = self.add_option(
+            lambda p: ui.LabeledEntry(
+                p, "Aggressive DPI (blank = 150)", placeholder="72-300"
+            )
+        )
+
+    def snapshot_options(self) -> dict:
+        level = "aggressive" if self.level_combo.get().startswith("Aggressive") else "lossless"
+        raw = self.dpi_entry.get().strip()
+        dpi = int(raw) if raw.isdigit() else None
+        return {"level": level, "dpi": dpi, "password": self.password()}
+
+    def execute(self, paths, output, progress, cancel, options=None) -> RunResult:
+        opts = options or {}
+        before = Path(paths[0]).stat().st_size
+        result = pdf_core.compress_pdf(
+            paths[0], output, level=opts.get("level", "lossless"),
+            image_dpi=opts.get("dpi"), password=opts.get("password"),
+            progress=progress, cancel_event=cancel,
+        )
+        after = result.stat().st_size
+        saved = max(0, round((before - after) / before * 100)) if before else 0
+        return RunResult(
+            message=f"Compressed to {result.name}",
+            outputs=[result], open_target=str(result),
+            detail=f"{saved}% smaller ({before // 1024} KB \u2192 {after // 1024} KB)",
+        )
+
+
+# --------------------------------------------------------------------------- #
+# Metadata removal
+# --------------------------------------------------------------------------- #
+
+class StripMetadataView(BaseToolView):
+    """Write the document again with its metadata taken out."""
+
+    key = "strip_metadata"
+    title = "Remove metadata"
+    subtitle = (
+        "Strip the hidden document information: title, author, producer, dates, "
+        "XMP metadata and embedded files. The pages themselves are untouched."
+    )
+    icon = "\u29d8"
+    categories = ("Tools",)
+    extensions = frozenset({".pdf"})
+    output_mode = "file"
+    output_suffix = "_clean.pdf"
+    output_filter = "PDF document"
+    needs_password = True
+    run_hint = (
+        "Detected on the selected file: title, author, subject, keywords, "
+        "creator, producer and the creation/modification dates."
+    )
+
+    def build_options(self, parent) -> None:
+        self.keep_entry = self.add_option(
+            lambda p: ui.LabeledEntry(
+                p, "Fields to keep (blank = drop all)",
+                placeholder="title, creator",
+            ),
+            full_width=True,
+        )
+
+    def snapshot_options(self) -> dict:
+        raw = self.keep_entry.get()
+        return {
+            "keep": [part.strip().lower() for part in raw.split(",") if part.strip()],
+            "password": self.password(),
+        }
+
+    def execute(self, paths, output, progress, cancel, options=None) -> RunResult:
+        opts = options or {}
+        removed = pdf_core.strip_metadata(
+            paths[0], output, password=opts.get("password"),
+            keep=opts.get("keep") or None,
+            progress=progress, cancel_event=cancel,
+        )
+        names = sorted(removed["removed_fields"])
+        parts = []
+        if names:
+            parts.append(f"{len(names)} field(s): {', '.join(names)}")
+        if removed["xmp_removed"]:
+            parts.append("XMP stream")
+        if removed["attachments_removed"]:
+            parts.append(f"{removed['attachments_removed']} attachment(s)")
+        if removed["kept_fields"]:
+            parts.append(f"kept {', '.join(removed['kept_fields'])}")
+        destination = Path(output)
+        return RunResult(
+            message=f"Cleaned metadata from {destination.name}",
+            outputs=[destination], open_target=str(destination),
+            detail="; ".join(parts) or "there was nothing to remove",
+        )
+
+
+# --------------------------------------------------------------------------- #
 # PDF conversions
 # --------------------------------------------------------------------------- #
 
@@ -913,6 +1237,66 @@ class PdfToWordView(BaseToolView):
         )
         return RunResult(
             message=f"Converted to {result.name}",
+            outputs=[result], open_target=str(result),
+        )
+
+
+class PdfOcrToWordView(BaseToolView):
+    """Recognize a scanned PDF and rebuild it as an editable Word document."""
+
+    key = "pdf_ocr_to_word"
+    title = "Scanned PDF \u2192 Word (OCR)"
+    subtitle = (
+        "Read a scan with Tesseract and write an editable .docx. Pages that "
+        "already carry text are copied as-is; only blank-looking pages are OCR'd."
+    )
+    icon = "O"
+    categories = ("Tools",)
+    extensions = frozenset({".pdf"})
+    output_mode = "file"
+    output_suffix = "_ocr.docx"
+    output_filter = "Word document"
+    needs_pages = True
+    needs_password = True
+    pages_label = "Pages to read (blank = all)"
+    run_hint = (
+        "OCR uses the Tesseract engine, which you install separately "
+        "(Windows/macOS/Linux). YourDoc never sends the pages anywhere."
+    )
+
+    #: Common Tesseract language codes; the buyer installs matching data packs.
+    _LANGUAGES = ["English (eng)", "Spanish (spa)", "French (fra)", "German (deu)"]
+
+    def build_options(self, parent) -> None:
+        self.lang_combo = self.add_option(
+            lambda p: ui.LabeledCombo(p, "Recognized language", self._LANGUAGES, default=self._LANGUAGES[0]),
+            full_width=True,
+        )
+
+    @staticmethod
+    def _lang_code(display: str) -> str:
+        # "English (eng)" -> "eng"; fall back to a lowercased token if the
+        # parenthesis is missing so an odd value never breaks the run.
+        if "(" in display and display.endswith(")"):
+            return display[display.rindex("(") + 1:-1]
+        return display.strip().lower() or "eng"
+
+    def snapshot_options(self) -> dict:
+        return {
+            "pages": self.pages(),
+            "password": self.password(),
+            "lang": self._lang_code(self.lang_combo.get()),
+        }
+
+    def execute(self, paths, output, progress, cancel, options=None) -> RunResult:
+        opts = options or {}
+        result = pdf_converters.pdf_to_word(
+            paths[0], output, pages=opts.get("pages"),
+            password=opts.get("password"), ocr=True,
+            ocr_lang=opts.get("lang", "eng"), progress=progress, cancel_event=cancel,
+        )
+        return RunResult(
+            message=f"OCR complete \u2192 {result.name}",
             outputs=[result], open_target=str(result),
         )
 
@@ -999,6 +1383,7 @@ class ImagesToPdfView(BaseToolView):
         opts = options or {}
         result = pdf_converters.images_to_pdf(
             paths, output, page_size=opts.get("mode", "fit"),
+            caps=self.context.config.caps,
             progress=progress, cancel_event=cancel
         )
         return RunResult(
@@ -1066,6 +1451,7 @@ class ExcelToPdfView(BaseToolView):
         notes: list = []
         result = office.excel_to_pdf(
             paths[0], output, progress=progress, cancel_event=cancel, notes=notes,
+            caps=self.context.config.caps,
         )
         return RunResult(
             message=f"Converted to {result.name}",
@@ -1132,6 +1518,7 @@ class ExcelToWordView(BaseToolView):
         notes: list = []
         result = office.excel_to_word(
             paths[0], output, progress=progress, cancel_event=cancel, notes=notes,
+            caps=self.context.config.caps,
         )
         return RunResult(
             message=f"Converted to {result.name}",
@@ -1147,7 +1534,14 @@ class ExcelToWordView(BaseToolView):
 # --------------------------------------------------------------------------- #
 VIEW_CLASSES: tuple[type[BaseToolView], ...] = (
     MergeView,
+    SplitView,
+    RotateView,
+    ExtractPagesView,
+    WatermarkView,
+    CompressView,
     PdfToWordView,
+    PdfOcrToWordView,
+    StripMetadataView,
     PdfToExcelView,
     PdfToImagesView,
     ImagesToPdfView,

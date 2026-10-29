@@ -38,6 +38,7 @@ its version follows from the direct pin.
 | numpy | 2.5.3 † | BSD 3-Clause | Numeric support for pandas |
 | openpyxl | 3.1.5 | MIT | .xlsx reader / writer engine |
 | Pillow | 12.3.0 | MIT-CMU (HPND) | Image encode / decode, PDF → Images, Images → PDF |
+| pytesseract | 0.3.13 | Apache-2.0 | OCR wrapper for scanned PDF → Word (the native Tesseract binary is not bundled — see below) |
 | cryptography | 50.0.1 | Apache-2.0 OR BSD-3-Clause | AES backend pypdf needs for encrypted PDFs |
 | customtkinter | 6.0.0 | MIT | Dark-themed Tkinter widgets |
 | tkinterdnd2 | 0.4.2 | MIT | Native drag & drop (optional, graceful fallback) |
@@ -80,5 +81,10 @@ not legal advice.
   `tools/make_brand_assets.py` and is excluded from version control.
 * YourDoc performs no network I/O at runtime, so no package is fetched or
   phoned home by the application itself.
+* **Tesseract (OCR)** is *not* bundled. `pytesseract` is only a thin Python
+  wrapper; the heavy `tesseract` binary must be installed separately by the
+  user (Windows: UB-Mannheim installer; macOS: `brew install tesseract`; Linux:
+  `apt install tesseract-ocr`). When it is absent, OCR degrades to a clear
+  per-OS install prompt rather than failing.
 * PDF → Word reads the PDF's text layer. It reproduces content and reading order,
   not the exact page layout, and a scanned PDF needs OCR first.
